@@ -4,7 +4,7 @@ Keep track of your parts in a Google Sheet, update the counts from your phone or
 email with the reorder link as soon as something runs low.
 
 <p>
-  <img src="docs/app-desktop.png" alt="The inventory list on a computer: totals for parts, low stock, out of stock and on order, then each part with its location, alert level, a − / + stepper and an order button" width="100%">
+  <img src="docs/app-desktop.png" alt="The inventory list on a computer: filters for low stock, out of stock and on order, then each part with its location, minimum, a − / + stepper, and a Reorder button on the parts that are low" width="100%">
 </p>
 <p>
   <img src="docs/app-phone.png" alt="The inventory list on a phone" width="32%">
@@ -122,12 +122,14 @@ how many are left today.
 - **Took parts or put some back?** Tap **−** / **+** in the list. Several taps in a row are saved as one change.
 - **Bigger changes:** open the part and use **Use**, **Restock** or **Set count** (after a physical count),
   with an optional note like a job number or PO.
-- **Reordering:** open a low part, click **Order from …** to buy it, then **Mark as ordered**.
+- **Reordering:** parts that are low get a **Reorder** button that opens the supplier's page. After you order,
+  tap **Mark as ordered** in the prompt that appears, so reminders skip that part until it's restocked.
 - **Bin labels:** **Copy link** in a part opens that part directly. Turn it into a QR code for the bin, and
   scanning it takes people straight to the − / + buttons.
 - **Your name:** if you're not signed in with a company Google account, the app asks for your name once, so
   the activity log shows who changed what.
-- The top tiles double as filters: click **Low stock** to see only what needs ordering.
+- The **Low stock** filter at the top of the list shows only what needs ordering.
+- On a phone, the back button closes an open part or form, and **Add part** sits at the bottom of the screen.
 
 ## Sharing with coworkers
 

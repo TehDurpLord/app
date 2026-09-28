@@ -176,22 +176,37 @@
   .banner .banner-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .banner .close { background: none; border: 0; padding: 2px; cursor: pointer; color: var(--muted); }
 
-  /* ---------- Stats and filters ---------- */
-  .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-  @media (min-width: 640px) { .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; } }
-  .stat {
-    text-align: left; cursor: pointer; padding: 12px 14px; border-radius: var(--radius);
-    border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow);
+  /* ---------- Filters ---------- */
+  .filters { display: flex; gap: 8px; margin: 0 -1px 12px; padding: 1px; overflow-x: auto; scrollbar-width: none; }
+  .filters::-webkit-scrollbar { display: none; }
+  .filter {
+    flex: none; display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 8px 0 14px;
+    border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--text-2); font-weight: 650; cursor: pointer; white-space: nowrap;
   }
-  .stat:hover { border-color: var(--border-strong); }
-  .stat[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-  @media (max-width: 520px) { .stat { padding: 10px 12px; } .stat .stat-num { font-size: 22px !important; } }
-  .stat .stat-num { display: block; font-size: 26px; font-weight: 750; line-height: 1.15; font-variant-numeric: tabular-nums; }
-  .stat .stat-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
-  .stat.low .stat-num { color: var(--low); }
-  .stat.out .stat-num { color: var(--out); }
-  .stat.ordered .stat-num { color: var(--ordered); }
-  .stat.zero .stat-num { color: var(--muted); }
+  .filter:hover { border-color: var(--muted); color: var(--text); }
+  .filter .count {
+    min-width: 24px; height: 24px; padding: 0 7px; border-radius: 999px; display: inline-grid; place-items: center;
+    background: var(--surface-2); color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums;
+  }
+  .filter.low.has .count { background: var(--low-soft); color: var(--low); }
+  .filter.out.has .count { background: var(--out-soft); color: var(--out); }
+  .filter.ordered.has .count { background: var(--ordered-soft); color: var(--ordered); }
+  .filter[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--surface); }
+  .filter[aria-pressed="true"] .count { background: var(--surface); color: var(--text); }
+  .filter .short { display: none; }
+  @media (max-width: 520px) {
+    .filters { gap: 6px; }
+    .filter { padding: 0 5px 0 10px; gap: 5px; font-size: 14px; height: 36px; }
+    .filter .count { min-width: 22px; height: 22px; padding: 0 6px; font-size: 12.5px; }
+    .filter .long { display: none; }
+    .filter .short { display: inline; }
+  }
+  @media (max-width: 380px) {
+    .filters { gap: 4px; }
+    .filter { padding: 0 4px 0 9px; gap: 4px; font-size: 13.5px; }
+    .filter .count { min-width: 20px; padding: 0 5px; }
+  }
 
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
   .search { position: relative; flex: 1 1 260px; display: flex; align-items: center; }
@@ -211,7 +226,7 @@
   .list-head { display: none; }
   .row {
     position: relative; display: grid; gap: 8px 12px; padding: 12px 14px 12px 18px;
-    grid-template-columns: minmax(0, 1fr) auto 38px; grid-template-areas: "main main link" "info stock stock";
+    grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main main" "extra stock";
     border-top: 1px solid var(--border);
   }
   .row:first-child { border-top: 0; }
@@ -226,15 +241,16 @@
   .row-title .name { font-weight: 650; overflow-wrap: anywhere; }
   .row-meta { margin-top: 2px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
   .row-loc { display: none; }
-  .row-info { grid-area: info; align-self: center; color: var(--muted); font-size: 13px; }
-  .row-stock { grid-area: stock; justify-self: end; }
-  .row-link { grid-area: link; align-self: start; }
-  .row-link .icon-btn { width: 38px; height: 38px; color: var(--accent); }
-  .row-link .placeholder { display: block; width: 38px; }
+  .row-extra { grid-area: extra; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
+  .row-min { display: none; }
+  .row-act:empty { display: none; }
+  .row-act .btn { min-height: 34px; padding: 0 12px; }
+  .row-act .on-order { display: inline-flex; align-items: center; gap: 5px; color: var(--ordered); font-size: 13px; font-weight: 650; }
+  .row-stock { grid-area: stock; justify-self: end; align-self: center; }
   @media (min-width: 760px) {
     .list-head, .row {
-      grid-template-columns: minmax(0, 1fr) minmax(90px, 150px) 110px 186px 40px;
-      grid-template-areas: "main loc info stock link";
+      grid-template-columns: minmax(0, 1fr) minmax(90px, 150px) 64px 186px 124px;
+      grid-template-areas: "main loc min stock act";
     }
     .list-head {
       display: grid; gap: 12px; padding: 10px 16px 10px 20px; background: var(--surface-2);
@@ -243,10 +259,11 @@
     }
     .list-head .right { text-align: right; }
     .row { align-items: center; padding: 10px 16px 10px 20px; }
-    .row-info { color: var(--text-2); font-size: 14px; font-variant-numeric: tabular-nums; }
-    .row-info .info-label { display: none; }
+    .row-extra { display: contents; }
+    .row-min { display: block; grid-area: min; color: var(--text-2); font-size: 14px; font-variant-numeric: tabular-nums; }
+    .meta-min { display: none; }
+    .row-act, .row-act:empty { display: block; grid-area: act; justify-self: end; }
     .row-loc { display: block; grid-area: loc; color: var(--text-2); font-size: 14px; overflow-wrap: anywhere; }
-    .row-link { align-self: center; }
     .meta-loc { display: none; }
   }
 
@@ -431,8 +448,19 @@
   .screen-card .error-text { color: var(--out); font-size: 14px; min-height: 20px; }
   .screen-card pre { text-align: left; white-space: pre-wrap; background: var(--surface-2); border-radius: 8px; padding: 10px; font-size: 13px; color: var(--text-2); }
 
+  /* ---------- Add part button on phones ---------- */
+  .fab {
+    position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 30;
+    display: inline-flex; align-items: center; gap: 8px; height: 52px; padding: 0 22px 0 18px;
+    border: 0; border-radius: 999px; background: var(--accent); color: var(--on-accent);
+    font-size: 16px; font-weight: 700; box-shadow: var(--shadow-lg); cursor: pointer;
+  }
+  .fab:hover { background: var(--accent-hover); }
+  @media (min-width: 760px) { .fab { display: none; } }
+  @media (max-width: 759px) { #add-btn { display: none; } }
+
   /* ---------- Toasts ---------- */
-  .toasts { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 80; width: min(460px, calc(100% - 24px)); display: grid; gap: 8px; pointer-events: none; }
+  .toasts { position: fixed; left: 50%; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 80; width: min(460px, calc(100% - 24px)); display: grid; gap: 8px; pointer-events: none; }
   .toast {
     pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px 11px 14px;
     border-radius: 11px; background: #1d2731; color: #f3f6f9; box-shadow: var(--shadow-lg); font-size: 14px;
@@ -440,6 +468,8 @@
   }
   .toast.error { background: #9f1f16; color: #fff; }
   .toast .grow { flex: 1; min-width: 0; padding-top: 1px; overflow-wrap: anywhere; }
+  .toast .toast-action { opacity: 1; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; padding: 1px 4px; white-space: nowrap; }
+  @media (min-width: 760px) { .toasts { bottom: calc(18px + env(safe-area-inset-bottom, 0px)); } }
   .toast button { background: none; border: 0; color: inherit; opacity: 0.75; cursor: pointer; padding: 1px; }
   .toast.leaving { opacity: 0; transform: translateY(6px); transition: all 0.2s; }
   @keyframes rise { from { transform: translateY(10px); opacity: 0; } }
@@ -471,7 +501,6 @@
   <main>
     <section id="view-inventory" aria-label="Inventory">
       <div id="banners"></div>
-      <div class="stats" id="stats"></div>
       <div class="toolbar">
         <label class="search">
           <span data-icon="search"></span>
@@ -487,6 +516,7 @@
           <option value="updated">Sort: Recently changed</option>
         </select>
       </div>
+      <div class="filters" id="filters" role="group" aria-label="Show"></div>
       <div id="list" class="list" aria-live="polite"></div>
     </section>
 
@@ -502,6 +532,7 @@
       <div id="settings" class="settings"></div>
     </section>
   </main>
+  <button class="fab" id="fab-add" type="button" data-icon="plus">Add part</button>
 </div>
 
 <div id="drawer" class="drawer" hidden>
@@ -547,9 +578,9 @@
           </div>
         </div>
         <div class="field">
-          <label for="f-minQty">Low-stock alert at</label>
+          <label for="f-minQty">Min qty (low-stock alert)</label>
           <input id="f-minQty" name="minQty" type="number" inputmode="decimal" min="0" step="any" placeholder="Leave blank for no alert">
-          <span class="hint">Emails go out when the quantity drops to this number or below.</span>
+          <span class="hint">When the quantity drops to this number or below, an email goes out with the order link.</span>
         </div>
         <div class="field" data-field="reorderQty">
           <label for="f-reorderQty">Reorder quantity</label>
@@ -918,7 +949,7 @@
 
   function renderAll() {
     renderBanners();
-    renderStats();
+    renderFilters();
     renderCategoryFilter();
     renderList();
     if (state.selectedId) renderDrawer();
@@ -955,21 +986,22 @@
     }
   }
 
-  function renderStats() {
+  function renderFilters() {
     const c = counts();
-    const el = clear($('#stats'));
+    const el = clear($('#filters'));
     [
-      { key: 'all', label: 'Parts', icon: 'box', n: c.all },
-      { key: 'low', label: 'Low stock', icon: 'alert', n: c.low },
-      { key: 'out', label: 'Out of stock', icon: 'x', n: c.out },
-      { key: 'ordered', label: 'On order', icon: 'truck', n: c.ordered },
-    ].forEach((s) => {
+      { key: 'all', label: 'All parts', short: 'All', n: c.all },
+      { key: 'low', label: 'Low stock', short: 'Low', n: c.low },
+      { key: 'out', label: 'Out of stock', short: 'Out', n: c.out },
+      { key: 'ordered', label: 'On order', short: 'Ordered', n: c.ordered },
+    ].forEach((f) => {
       el.appendChild(h('button', {
-        class: 'stat ' + s.key + (s.n === 0 && s.key !== 'all' ? ' zero' : ''),
+        class: 'filter ' + f.key + (f.n > 0 ? ' has' : ''),
         type: 'button',
-        'aria-pressed': String(state.filter === s.key),
-        onclick: () => setFilter(state.filter === s.key && s.key !== 'all' ? 'all' : s.key),
-      }, h('span', { class: 'stat-num' }, fmt(s.n)), h('span', { class: 'stat-label' }, icon(s.icon, 15), s.label)));
+        'data-filter': f.key,
+        'aria-pressed': String(state.filter === f.key),
+        onclick: () => setFilter(state.filter === f.key && f.key !== 'all' ? 'all' : f.key),
+      }, h('span', { class: 'long' }, f.label), h('span', { class: 'short' }, f.short), h('span', { class: 'count' }, fmt(f.n))));
     });
   }
 
@@ -1003,7 +1035,7 @@
       return;
     }
     el.appendChild(h('div', { class: 'list-head', 'aria-hidden': 'true' },
-      h('span', {}, 'Part'), h('span', {}, 'Location'), h('span', {}, 'Alert at'), h('span', { class: 'right' }, 'On hand'), h('span', {})));
+      h('span', {}, 'Part'), h('span', {}, 'Location'), h('span', {}, 'Min'), h('span', { class: 'right' }, 'On hand'), h('span', {})));
     parts.slice(0, state.showCount).forEach((p) => el.appendChild(partRow(p)));
     if (parts.length > state.showCount) {
       el.appendChild(h('div', { class: 'more' },
@@ -1025,14 +1057,30 @@
     const s = statusOf(p);
     const q = qtyOf(p);
     const busy = unsaved(p.id) !== 0 || p.id in state.inflight;
-    const meta = [p.id, p.partNumber ? '#' + p.partNumber : '', p.category].filter(Boolean).join(' · ');
     const link = safeUrl(p.links[0]);
+    // Where to find it first; on wide screens the location has its own column.
+    const meta = [
+      p.location ? h('span', { class: 'meta-loc' }, p.location, p.partNumber || p.minQty !== null ? ' · ' : '') : null,
+      p.partNumber ? h('span', {}, '#' + p.partNumber) : null,
+      p.minQty !== null ? h('span', { class: 'meta-min' }, (p.partNumber ? ' · ' : '') + 'Min ' + fmt(p.minQty)) : null,
+    ].filter(Boolean);
+    let action = null;
+    if (p.ordered) {
+      action = h('span', { class: 'on-order' }, icon('truck', 15), 'On order');
+    } else if (s !== 'ok' && link) {
+      action = h('a', {
+        class: 'btn small primary', href: link, target: '_blank', rel: 'noopener noreferrer',
+        title: 'Opens ' + hostOf(link), onclick: () => offerMarkOrdered(p.id),
+      }, icon('cart', 16), 'Reorder');
+    }
     return h('div', { class: 'row status-' + s, 'data-id': p.id },
       h('button', { class: 'row-main', type: 'button', onclick: () => openPart(p.id) },
-        h('span', { class: 'row-title' }, h('span', { class: 'name' }, displayName(p)), badges(p)),
-        h('span', { class: 'row-meta' }, meta, p.location ? h('span', { class: 'meta-loc' }, ' · ', p.location) : null)),
+        h('span', { class: 'row-title' }, h('span', { class: 'name' }, displayName(p)), statusBadge(p)),
+        meta.length ? h('span', { class: 'row-meta' }, meta) : null),
       h('div', { class: 'row-loc' }, p.location || h('span', { class: 'muted' }, '—')),
-      h('div', { class: 'row-info' }, p.minQty !== null ? [h('span', { class: 'info-label' }, 'Alert at '), fmt(p.minQty)] : 'No alert'),
+      h('div', { class: 'row-extra' },
+        h('div', { class: 'row-act' }, action),
+        h('div', { class: 'row-min' }, p.minQty !== null ? fmt(p.minQty) : h('span', { class: 'muted' }, '—'))),
       h('div', { class: 'row-stock' },
         h('div', { class: 'stepper' },
           h('button', {
@@ -1043,17 +1091,30 @@
             h('strong', {}, fmt(q)), p.unit ? h('small', {}, p.unit) : null),
           h('button', {
             class: 'step', type: 'button', 'aria-label': 'Put one ' + displayName(p) + ' back', onclick: () => quickAdjust(p.id, 1),
-          }, icon('plus')))),
-      h('div', { class: 'row-link' }, link
-        ? h('a', { class: 'icon-btn', href: link, target: '_blank', rel: 'noopener noreferrer', title: 'Order from ' + hostOf(link), 'aria-label': 'Order ' + displayName(p) + ' from ' + hostOf(link) }, icon('cart'))
-        : h('span', { class: 'placeholder' })));
+          }, icon('plus')))));
+  }
+
+  function statusBadge(p) {
+    const s = statusOf(p);
+    if (s === 'low') return h('span', { class: 'badge low' }, 'Low');
+    if (s === 'out') return h('span', { class: 'badge out' }, 'Out');
+    return null;
+  }
+
+  /** After Reorder opens the supplier's page, offer to mark the part as ordered. */
+  function offerMarkOrdered(id) {
+    setTimeout(() => {
+      const p = partById(id);
+      if (!p || p.ordered) return;
+      toast('Placed the order for ' + displayName(p) + '?', 'cart', { label: 'Mark as ordered', run: () => setOrdered(id, true) });
+    }, 400);
   }
 
   function updateRow(id) {
     const old = $('#list .row[data-id="' + CSS.escape(id) + '"]');
     const p = partById(id);
     if (old && p) old.replaceWith(partRow(p));
-    renderStats();
+    renderFilters();
     if (state.selectedId === id) renderDrawer();
   }
 
@@ -1124,6 +1185,7 @@
     if (!p) { toast('That part wasn\'t found. It may have been deleted.', 'error'); return; }
     if (state.selectedId !== id) state.adjustMode = statusOf(p) === 'out' ? 'add' : 'remove';
     drawerReturnFocus = document.activeElement;
+    if (!state.selectedId) pushBackStop('part');
     state.selectedId = id;
     $('#drawer').hidden = false;
     document.body.style.overflow = 'hidden';
@@ -1132,8 +1194,9 @@
     if (close) close.focus();
   }
 
-  function closeDrawer() {
+  function closeDrawer(fromBackButton) {
     if (!state.selectedId) return;
+    if (!fromBackButton) popBackStop('part');
     state.selectedId = null;
     $('#drawer').hidden = true;
     document.body.style.overflow = '';
@@ -1206,7 +1269,7 @@
       h('div', { class: 'stock-top' },
         h('div', {}, h('div', { class: 'eyebrow' }, 'On hand'), h('div', { class: 'stock-big' }, fmt(q), p.unit ? h('small', {}, p.unit) : null)),
         h('div', { class: 'stock-levels' },
-          p.minQty !== null ? h('div', {}, 'Low-stock alert at ', h('b', {}, fmt(p.minQty))) : h('div', {}, 'No low-stock alert set'),
+          p.minQty !== null ? h('div', {}, 'Min ', h('b', {}, fmt(p.minQty)), ' (alert at or below)') : h('div', {}, 'No min set, so no alerts'),
           p.reorderQty !== null ? h('div', {}, 'Reorder ', h('b', {}, fmt(p.reorderQty))) : null)),
       form));
 
@@ -1384,7 +1447,7 @@
     if (!p) $('#f-quantity').value = '0';
     ['category', 'location', 'supplier'].forEach((key) => fillDatalist('#dl-' + key, uniqueValues(key)));
     fillDatalist('#dl-unit', ['ea', 'pcs', 'box', 'pack', 'bag', 'roll', 'ft', 'm', 'lb', 'kg', 'gal', 'L'].concat(uniqueValues('unit')));
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) openDialog(dialog);
     focusLater('#' + (focusId || 'f-name'), true);
   }
 
@@ -1675,16 +1738,18 @@
   // Toasts and small dialogs
   // -------------------------------------------------------------------------
 
-  function toast(message, kind) {
+  /** action (optional) = { label, run } shows a button in the toast. */
+  function toast(message, kind, action) {
     const box = $('#toasts');
     const el = h('div', { class: 'toast' + (kind === 'error' ? ' error' : ''), role: kind === 'error' ? 'alert' : 'status' },
       icon(kind === 'error' ? 'alert' : ICONS[kind] ? kind : 'info', 18),
       h('div', { class: 'grow' }, message),
+      action ? h('button', { class: 'toast-action', type: 'button', onclick: () => { dismiss(); action.run(); } }, action.label) : null,
       h('button', { type: 'button', 'aria-label': 'Dismiss', onclick: () => dismiss() }, icon('x', 16)));
     const dismiss = () => { el.classList.add('leaving'); setTimeout(() => el.remove(), 200); };
     box.appendChild(el);
     while (box.children.length > 3) box.firstChild.remove();
-    setTimeout(dismiss, kind === 'error' ? 9000 : 4500);
+    setTimeout(dismiss, action ? 12000 : kind === 'error' ? 9000 : 4500);
   }
 
   function confirmDialog(opts) {
@@ -1694,7 +1759,7 @@
     const ok = $('#confirm-ok');
     ok.textContent = opts.ok || 'OK';
     ok.className = 'btn ' + (opts.danger ? 'danger-fill' : 'primary');
-    dialog.showModal();
+    openDialog(dialog);
     return new Promise((resolve) => {
       const done = (value) => {
         ok.onclick = null;
@@ -1712,8 +1777,41 @@
   function askName() {
     const dialog = $('#name-dialog');
     $('#name-input').value = state.actor;
-    dialog.showModal();
+    openDialog(dialog);
     focusLater('#name-input', true);
+  }
+
+  // A phone's back button should close the part panel or form on top, not
+  // leave the app, so opening one adds a history entry and closing removes it.
+  let closingFromBack = false;
+  let ownBackPending = 0;
+
+  function pushBackStop(kind) {
+    try { history.pushState({ partsInventory: kind }, ''); } catch (err) { /* history not available here */ }
+  }
+
+  function popBackStop(kind) {
+    try {
+      if (history.state && history.state.partsInventory === kind) {
+        ownBackPending++;
+        history.back();
+      }
+    } catch (err) { /* history not available here */ }
+  }
+
+  function openDialog(dialog) {
+    dialog.showModal();
+    pushBackStop('dialog');
+  }
+
+  function onBack() {
+    // Our own history.back() after closing something isn't the back button.
+    if (ownBackPending > 0) { ownBackPending--; return; }
+    const dialog = $('dialog[open]');
+    closingFromBack = true;
+    if (dialog) dialog.close();
+    else if (state.selectedId) closeDrawer(true);
+    closingFromBack = false;
   }
 
   function focusLater(sel, select) {
@@ -1734,6 +1832,7 @@
     $$('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.getAttribute('data-view') === view)));
     ['inventory', 'activity', 'settings'].forEach((v) => { $('#view-' + v).hidden = v !== view; });
     $('#add-btn').hidden = view !== 'inventory';
+    $('#fab-add').hidden = view !== 'inventory';
     if (view === 'settings') renderSettings();
     if (view === 'activity') showActivity();
     window.scrollTo(0, 0);
@@ -1742,7 +1841,7 @@
   function setFilter(filter) {
     state.filter = filter;
     state.showCount = 150;
-    renderStats();
+    renderFilters();
     renderList();
   }
 
@@ -1752,7 +1851,7 @@
     state.category = '';
     $('#search').value = '';
     renderCategoryFilter();
-    renderStats();
+    renderFilters();
     renderList();
   }
 
@@ -1820,6 +1919,7 @@
     $$('.tab').forEach((t) => t.addEventListener('click', () => setView(t.getAttribute('data-view'))));
     $('#refresh-btn').addEventListener('click', () => { flushAll(); load(); if (state.view === 'activity') loadActivity(); });
     $('#add-btn').addEventListener('click', () => openPartForm(null));
+    $('#fab-add').addEventListener('click', () => openPartForm(null));
     $('#activity-refresh').addEventListener('click', loadActivity);
     let searchTimer = null;
     $('#search').addEventListener('input', (e) => {
@@ -1853,6 +1953,8 @@
       if (state.data && Date.now() - state.loadedAt > 60000 && !busy()) load();
     });
     window.addEventListener('pagehide', flushAll);
+    window.addEventListener('popstate', onBack);
+    $$('dialog').forEach((d) => d.addEventListener('close', () => { if (!closingFromBack) popBackStop('dialog'); }));
     setInterval(() => {
       if (document.visibilityState === 'visible' && state.data && !busy() && Date.now() - state.loadedAt > 5 * 60000) load();
     }, 60000);

@@ -56,15 +56,18 @@ test.describe('web app in a browser', { skip }, () => {
     const page = await open('/');
     await page.waitForSelector('.row');
     assert.equal(await page.locator('.row').count(), 12);
-    assert.deepEqual(await page.locator('.stat .stat-num').allTextContents(), ['12', '4', '1', '1']);
+    assert.deepEqual(await page.locator('.filter .count').allTextContents(), ['12', '4', '1', '1']);
     assert.match(await row(page, 'P-0004').textContent(), /V-belt A42\s*Out/);
     assert.equal(await row(page, 'P-0002').locator('.badge.low').count(), 1);
-    assert.equal(await row(page, 'P-0006').locator('.badge.ordered').count(), 1);
-    assert.equal(await row(page, 'P-0001').locator('a.icon-btn').getAttribute('href'), 'https://www.mcmaster.com/91292A112/');
+    assert.equal(await row(page, 'P-0002').locator('.row-act a').getAttribute('href'), 'https://www.mcmaster.com/94150A325/',
+      'low parts get a Reorder button to the supplier');
+    assert.equal(await row(page, 'P-0001').locator('.row-act a').count(), 0, 'parts that are fine do not');
+    assert.match(await row(page, 'P-0006').locator('.row-act').textContent(), /On order/);
+    assert.match(await row(page, 'P-0002').locator('.row-meta').textContent(), /Bin A-13 · #94150A325/, 'location comes first');
 
-    await page.click('.stat.low');
+    await page.click('.filter[data-filter="low"]');
     assert.equal(await page.locator('.row').count(), 4);
-    await page.click('.stat.low');
+    await page.click('.filter[data-filter="low"]');
     await page.fill('#search', 'grainger belt');
     await page.waitForTimeout(200);
     assert.deepEqual(await page.locator('.row .name').allTextContents(), ['V-belt A42']);
@@ -91,7 +94,7 @@ test.describe('web app in a browser', { skip }, () => {
     const log = app.run('apiGetActivity', {}, { partId: 'P-0003' }).entries;
     assert.deepEqual([log[0].action, log[1].action, log[1].change], ['Alert emailed', 'Used', -3]);
     assert.equal(await row(page, 'P-0003').locator('.badge.low').count(), 1);
-    assert.equal(await page.locator('.stat.low .stat-num').textContent(), '5');
+    assert.equal(await page.locator('.filter[data-filter="low"] .count').textContent(), '5');
     assert.deepEqual(page.errors, []);
   });
 
@@ -231,6 +234,12 @@ test.describe('web app in a browser', { skip }, () => {
     await page.waitForSelector('.row');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 0, 'no sideways scrolling on a phone');
+    assert.equal(await page.locator('#fab-add').isVisible(), true, 'a labeled Add part button on phones');
+    assert.equal(await page.locator('#add-btn').isVisible(), false);
+    await page.click('#fab-add');
+    assert.equal(await page.locator('#part-dialog').evaluate((d) => d.open), true);
+    await page.goBack();
+    assert.equal(await page.locator('#part-dialog').evaluate((d) => d.open), false, 'back closes the form');
     await row(page, 'P-0003').locator('.row-main').click();
     await page.waitForSelector('#drawer-panel .stock-card');
     const panel = await page.locator('#drawer-panel').boundingBox();
@@ -290,6 +299,40 @@ test.describe('web app in a browser', { skip }, () => {
     page = await open('/?part=HW-001');
     await page.waitForSelector('#drawer-panel .stock-card');
     assert.equal(await page.textContent('#drawer-title'), 'M3 hex nut, stainless');
+    assert.deepEqual(page.errors, []);
+  });
+
+  test('Reorder opens the supplier and offers to mark the part as ordered', async () => {
+    preview.reset();
+    const page = await open('/');
+    await page.context().route('https://www.digikey.com/**', (route) => route.fulfill({ contentType: 'text/html', body: 'Supplier page' }));
+    await page.waitForSelector('.row');
+    const [supplier] = await Promise.all([
+      page.context().waitForEvent('page'),
+      row(page, 'P-0008').locator('.row-act a').click(),
+    ]);
+    await supplier.waitForLoadState();
+    assert.match(supplier.url(), /digikey\.com/);
+    await supplier.close();
+    await page.click('.toast-action:has-text("Mark as ordered")');
+    await page.waitForSelector('.toast:has-text("Marked as ordered")');
+    assert.equal(serverPart('5 A fast-acting fuse, 5 × 20 mm').ordered, true);
+    assert.match(await row(page, 'P-0008').locator('.row-act').textContent(), /On order/);
+    assert.deepEqual(page.errors, []);
+  });
+
+  test('the back button closes an open part instead of leaving the app', async () => {
+    preview.reset();
+    const page = await open('/');
+    await page.waitForSelector('.row');
+    await row(page, 'P-0003').locator('.row-main').click();
+    await page.waitForSelector('#drawer-panel .stock-card');
+    await page.goBack();
+    await page.waitForFunction(() => document.getElementById('drawer').hidden);
+    assert.equal(await page.locator('.row').count(), 12, 'still in the app');
+    await row(page, 'P-0003').locator('.row-main').click();
+    await page.click('#drawer-close');
+    assert.equal(await page.locator('#drawer').isHidden(), true);
     assert.deepEqual(page.errors, []);
   });
 });
