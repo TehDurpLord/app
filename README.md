@@ -108,6 +108,9 @@ look in your spam folder and mark it *Not spam*.
 - **Safety net:** a check runs every hour and catches anything missed, like a failed email (they're
   retried), a formula that changed a quantity, or edits made while the email service was busy.
 
+If lots of parts run low at once, the email shows the first 25 in full and lists the rest by name, so
+it stays under Gmail's size limit.
+
 Google limits how many emails a script can send per day: about 100 recipients a day on a free Gmail
 account and 1,500 on Google Workspace. Every address on an email counts. The Settings page in the app shows
 how many are left today.
@@ -152,7 +155,7 @@ Change these in the **Settings** tab of the spreadsheet, or under **Settings** i
 | Reminder hour (0-23) | When the reminder goes out, in the spreadsheet's time zone (*File → Settings*). |
 | App name | Shown at the top of the app and in email subjects, e.g. `Shop 2 Parts`. |
 | App access code | Optional code people must enter before using the app. |
-| Web app URL | Filled in automatically. Used for the links in emails. |
+| Web app URL | Filled in automatically the first time the web app is opened, and used for the links in emails. If it stays empty, paste the web app URL (it ends in `/exec`) here. |
 
 ## Use your existing spreadsheet
 
@@ -174,8 +177,10 @@ Change these in the **Settings** tab of the spreadsheet, or under **Settings** i
 
 3. Run **Inventory → Set up / repair**. It adds any columns the app needs at the end (*ID*, *Min Qty*,
    *Order Link*, *Ordered On*, *Alert Sent*, *Last Updated*, *Updated By*) and **never deletes or moves
-   anything**. Your own extra columns are left alone, a title row above the headings is fine, and links
-   made with *Insert → Link* or `=HYPERLINK()` work as order links.
+   anything**. Your own extra columns are left alone, a title row above the headings is fine, a *Total* row
+   under the list isn't treated as a part, and links made with *Insert → Link* or `=HYPERLINK()` work as
+   order links. The grey columns the app fills in itself are only recognized by those exact names, so a
+   column of yours like *Ordered* or *Updated* is never taken over.
 
 Optional columns you don't have (like *Unit Cost*) are simply hidden in the app. Add the column any
 time to start using it.

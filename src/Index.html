@@ -735,6 +735,9 @@
     partActivity: {},
     partActivityLoading: {},
     touched: {},
+    deleted: {},
+    adjustDraft: null,
+    settingsDirty: false,
     code: store.get('code') || '',
     actor: store.get('actor') || '',
     loadedAt: 0,
@@ -771,7 +774,7 @@
 
   function api(fn, ...args) {
     return call(fn, ...args).catch((err) => {
-      if (isAccessError(err)) showLock(errorText(err));
+      if (isAccessError(err)) showLock(errorText(err), /ACCESS_LOCKED/.test((err && err.message) || String(err)));
       throw err;
     });
   }
@@ -785,11 +788,14 @@
     const requestedAt = Date.now();
     return api('apiGetData')
       .then((data) => {
-        // A change saved while this was loading is newer than what came back.
-        data.parts = data.parts.map((p) => {
-          const mine = state.touched[p.id] > requestedAt ? partById(p.id) : null;
-          return mine || p;
+        // Changes saved while this was loading are newer than what came back.
+        const newer = (id) => state.touched[id] > requestedAt;
+        const seen = {};
+        data.parts = data.parts.filter((p) => !(state.deleted[p.id] > requestedAt)).map((p) => {
+          seen[p.id] = true;
+          return (newer(p.id) && partById(p.id)) || p;
         });
+        state.parts.forEach((p) => { if (newer(p.id) && !seen[p.id]) data.parts.push(p); });
         applyData(data);
         if (opts.fromLock) store.set('code', state.code);
       })
@@ -889,7 +895,7 @@
     renderCategoryFilter();
     renderList();
     if (state.selectedId) renderDrawer();
-    if (state.view === 'settings') renderSettings();
+    if (state.view === 'settings' && !state.settingsDirty) renderSettings();
     if (state.view === 'activity') showActivity();
   }
 
@@ -1105,6 +1111,8 @@
     $('#drawer').hidden = true;
     document.body.style.overflow = '';
     if (drawerReturnFocus && document.contains(drawerReturnFocus)) drawerReturnFocus.focus();
+    // Refreshes are held while the panel is open; catch up now if it's been a while.
+    if (state.data && Date.now() - state.loadedAt > 60000 && !busy()) load();
   }
 
   function renderDrawer() {
@@ -1128,11 +1136,17 @@
     panel.appendChild(body);
 
     // Stock and adjusting it
+    const draft = state.adjustDraft && state.adjustDraft.id === p.id ? state.adjustDraft : null;
     const amount = h('input', {
-      id: 'adjust-amount', type: 'number', inputmode: 'decimal', min: '0', step: 'any',
-      value: state.adjustMode === 'set' ? (q === null ? '' : String(q)) : '1', 'aria-label': 'Amount',
+      id: 'adjust-amount', type: 'number', inputmode: 'decimal', min: '0', step: 'any', 'aria-label': 'Amount',
     });
+    amount.value = draft && draft.mode === state.adjustMode ? draft.amount
+      : state.adjustMode === 'set' ? (q === null ? '' : String(q)) : '1';
     const note = h('input', { id: 'adjust-note', type: 'text', maxlength: '300', placeholder: 'Note (optional), e.g. job or reason', 'aria-label': 'Note' });
+    note.value = draft ? draft.note : '';
+    const saveDraft = () => { state.adjustDraft = { id: p.id, mode: state.adjustMode, amount: amount.value, note: note.value }; };
+    amount.addEventListener('input', saveDraft);
+    note.addEventListener('input', saveDraft);
     const preview = h('div', { class: 'adjust-preview', 'aria-live': 'polite' });
     const apply = h('button', { class: 'btn primary block', type: 'submit' }, 'Apply');
     const updatePreview = () => {
@@ -1146,7 +1160,12 @@
     amount.addEventListener('input', updatePreview);
     const modeButton = (mode, label) => h('button', {
       type: 'button', 'aria-pressed': String(state.adjustMode === mode),
-      onclick: () => { state.adjustMode = mode; renderDrawer(); focusLater('#adjust-amount', true); },
+      onclick: () => {
+        if (state.adjustDraft && state.adjustDraft.id === p.id) state.adjustDraft.mode = null;
+        state.adjustMode = mode;
+        renderDrawer();
+        focusLater('#adjust-amount', true);
+      },
     }, label);
     const form = h('form', {
       class: 'form-grid', onsubmit: (e) => { e.preventDefault(); submitAdjust(p.id, amount.value, note.value, apply); },
@@ -1215,6 +1234,7 @@
     button.disabled = true;
     api('apiAdjustStock', { id: id, mode: mode, amount: amount, note: note })
       .then((res) => {
+        state.adjustDraft = null;
         replacePart(res.part);
         const verb = mode === 'add' ? 'Restocked ' + fmt(amount) : mode === 'remove' ? 'Used ' + fmt(amount) : 'Count set to ' + fmt(amount);
         toast(verb + ' · ' + fmt(res.part.quantity) + ' on hand' + (mode === 'set' && before !== null ? ' (was ' + fmt(before) + ')' : ''), 'check');
@@ -1261,7 +1281,7 @@
 
   function copyPartLink(p) {
     const base = state.data.settings.appUrl;
-    if (!base) { toast('The link is available once the app has been opened from its web app URL.', 'info'); return; }
+    if (!base) { toast('Add the web app link in Settings first (it ends in /exec).', 'info'); return; }
     const url = base + (base.indexOf('?') === -1 ? '?' : '&') + 'part=' + encodeURIComponent(p.id);
     copyText(url).then((ok) => toast(ok ? 'Link copied. It opens this part directly (handy for QR labels on bins).' : url, ok ? 'check' : 'link'));
   }
@@ -1293,6 +1313,7 @@
       if (!yes) return;
       api('apiDeletePart', p.id)
         .then(() => {
+          state.deleted[p.id] = Date.now();
           state.parts = state.parts.filter((x) => x.id !== p.id);
           state.activity = null;
           closeDrawer();
@@ -1499,6 +1520,7 @@
   }
 
   function renderSettings() {
+    state.settingsDirty = false;
     const el = clear($('#settings'));
     const d = state.data;
     const s = d.settings;
@@ -1518,7 +1540,7 @@
     appName.value = s.appName;
     const code = h('input', { id: 's-code', maxlength: '64', disabled: off, autocomplete: 'off', spellcheck: 'false', placeholder: owner ? 'Not set' : (s.accessCodeSet ? 'Set' : 'Not set') });
     code.value = s.accessCode;
-    const appUrl = h('input', { id: 's-appurl', type: 'url', disabled: off, spellcheck: 'false', placeholder: 'Filled in when the web app is opened' });
+    const appUrl = h('input', { id: 's-appurl', type: 'url', disabled: off, spellcheck: 'false', placeholder: 'Paste the web app link (ends in /exec)' });
     appUrl.value = s.appUrl;
 
     const saveBtn = h('button', { class: 'btn primary', type: 'submit', disabled: off }, 'Save settings');
@@ -1530,6 +1552,7 @@
         reminderHour: Number(hour.value), appName: appName.value, accessCode: code.value, appUrl: appUrl.value,
       })
         .then((res) => {
+          state.settingsDirty = false;
           state.data.settings = res.settings;
           $('#app-name').textContent = res.settings.appName;
           document.title = res.settings.appName;
@@ -1557,8 +1580,11 @@
       h('div', { class: 'field' }, h('label', { for: 's-code' }, 'Access code'), code,
         h('span', { class: 'hint' }, 'Optional. People enter it once per device. Use one if anyone with the link can open the app.')),
       h('div', { class: 'field span-2' }, h('label', { for: 's-appurl' }, 'Web app link'), appUrl,
-        h('span', { class: 'hint' }, 'Used for the "View in the app" links in emails.'))),
+        h('span', { class: 'hint' }, 'Used for the "View in the app" links in emails. It\'s usually filled in when the app is first opened; if it\'s empty, paste the link from Deploy > Manage deployments.'))),
     h('div', { class: 'card-actions' }, saveBtn));
+    const markDirty = () => { state.settingsDirty = true; };
+    form.addEventListener('input', markDirty);
+    form.addEventListener('change', markDirty);
     el.appendChild(form);
 
     // Emails card
@@ -1704,7 +1730,7 @@
   }
 
   /** Shows the access code screen. message is the server's reason, shown only when a code was tried. */
-  function showLock(message) {
+  function showLock(message, lockedOut) {
     const screen = clear($('#screen'));
     $('#app').hidden = true;
     closeDrawer();
@@ -1721,14 +1747,19 @@
         if (!state.code) return;
         btn.disabled = true;
         error.textContent = '';
-        load({ fromLock: true }).then(() => { btn.disabled = false; });
+        load({ fromLock: true }).then(() => { btn.disabled = false; openDeepLink(); });
       } }, input, error, btn)));
     screen.hidden = false;
     if (message && state.code) {
-      // A saved or typed code was turned down: say why and forget it.
       error.textContent = message;
-      state.code = '';
-      store.set('code', '');
+      if (lockedOut) {
+        // Too many wrong tries by someone: this code may be fine, so keep it for later.
+        input.value = state.code;
+      } else {
+        // This code was turned down: forget it.
+        state.code = '';
+        store.set('code', '');
+      }
     }
     setTimeout(() => input.focus(), 30);
   }
@@ -1792,13 +1823,18 @@
     });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') { flushAll(); return; }
-      if (state.data && Date.now() - state.loadedAt > 60000 && !Object.keys(state.pending).length) load();
+      if (state.data && Date.now() - state.loadedAt > 60000 && !busy()) load();
     });
     window.addEventListener('pagehide', flushAll);
     setInterval(() => {
-      if (document.visibilityState === 'visible' && state.data && !$('dialog[open]') && !Object.keys(state.pending).length &&
-          !Object.keys(state.inflight).length && Date.now() - state.loadedAt > 5 * 60000) load();
+      if (document.visibilityState === 'visible' && state.data && !busy() && Date.now() - state.loadedAt > 5 * 60000) load();
     }, 60000);
+  }
+
+  /** True while someone is in the middle of something a background refresh would disturb. */
+  function busy() {
+    return !!$('dialog[open]') || !!state.selectedId || state.settingsDirty ||
+      Object.keys(state.pending).length > 0 || Object.keys(state.inflight).length > 0;
   }
 
   function start() {
@@ -1816,10 +1852,11 @@
 
   function openDeepLink() {
     if (!BOOT.part || !state.data) return;
-    const id = String(BOOT.part).toUpperCase();
+    const wanted = String(BOOT.part).trim();
     BOOT.part = '';
-    if (partById(id)) openPart(id);
-    else toast('Part ' + id + ' wasn\'t found. It may have been deleted.', 'error');
+    const part = state.parts.find((p) => p.id.toUpperCase() === wanted.toUpperCase());
+    if (part) openPart(part.id);
+    else toast('Part ' + wanted + ' wasn\'t found. It may have been deleted.', 'error');
   }
 
   start();

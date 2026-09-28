@@ -249,4 +249,47 @@ test.describe('web app in a browser', { skip }, () => {
     assert.equal(await page.locator('#part-dialog').evaluate((d) => d.open), true);
     assert.deepEqual(page.errors, []);
   });
+
+  test('a refresh keeps what you typed and what you just changed', async () => {
+    preview.reset();
+    const page = await open('/?part=P-0005');
+    await page.waitForSelector('#drawer-panel .stock-card');
+    await page.click('.segmented button:has-text("Restock")');
+    await page.fill('#adjust-amount', '200');
+    await page.fill('#adjust-note', 'PO 5521');
+    await page.evaluate(() => document.getElementById('refresh-btn').click());
+    await page.waitForFunction(() => !document.querySelector('#refresh-btn.spin'));
+    assert.equal(await page.inputValue('#adjust-amount'), '200');
+    assert.equal(await page.inputValue('#adjust-note'), 'PO 5521');
+    await page.click('.segmented button:has-text("Use")');
+    assert.equal(await page.inputValue('#adjust-amount'), '1', 'switching mode resets the amount');
+    assert.equal(await page.inputValue('#adjust-note'), 'PO 5521', 'but keeps the note');
+    await page.keyboard.press('Escape');
+
+    await page.click('.tab[data-view="settings"]');
+    await page.fill('#s-appname', 'Unsaved name');
+    await page.evaluate(() => document.getElementById('refresh-btn').click());
+    await page.waitForFunction(() => !document.querySelector('#refresh-btn.spin'));
+    assert.equal(await page.inputValue('#s-appname'), 'Unsaved name', 'unsaved settings survive a refresh');
+    assert.deepEqual(page.errors, []);
+  });
+
+  test('a part link opens the part after the access code, whatever the case of its ID', async () => {
+    preview.reset({ code: 'bolt-7731' });
+    let page = await open('/?as=visitor&part=P-0002');
+    await page.waitForSelector('#code-input');
+    await page.fill('#code-input', 'bolt-7731');
+    await page.click('.screen-card button[type=submit]');
+    await page.waitForSelector('#drawer-panel .stock-card');
+    assert.equal(await page.textContent('#drawer-title'), 'M3 hex nut, stainless');
+
+    preview.reset();
+    const app = preview.getApp();
+    const sheet = app.sheet('Inventory');
+    sheet.getRange(3, sheet.dump()[0].indexOf('ID') + 1).setValue('hw-001');
+    page = await open('/?part=HW-001');
+    await page.waitForSelector('#drawer-panel .stock-card');
+    assert.equal(await page.textContent('#drawer-title'), 'M3 hex nut, stainless');
+    assert.deepEqual(page.errors, []);
+  });
 });

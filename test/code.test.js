@@ -481,13 +481,107 @@ test('an existing sheet with its own headers, a title row and linked text works 
     [belt.id, belt.name, belt.partNumber, belt.quantity, belt.minQty, belt.supplier, belt.links],
     ['P-0001', 'V-belt A42', '00042', 3, 2, 'Grainger', ['https://www.grainger.com/product/A42']]);
   assert.deepEqual(filter.links, ['https://www.uline.com/AF9']);
-  assert.equal(data.parts[2].name, 'Total');
+  assert.equal(data.parts.length, 2, 'the Total row is not a part');
 
   const res = adjust(app, belt.id, 'remove', 1);
   assert.equal(res.part.quantity, 2);
   assert.equal(res.alert.sent, true);
   assert.deepEqual(sheet.getRange(3, 1, 1, 7).getValues()[0], ['V-belt A42', '00042', 2, 2, 'Grainger', 'Buy here', 'photo-1.jpg']);
   assert.match(app.env.sent[0].htmlBody, /href="https:\/\/www\.grainger\.com\/product\/A42"/);
+
+  addPart(app, { name: 'Fan belt B30' });
+  assert.deepEqual(sheet.dump().slice(2).map((r) => r[0]), ['V-belt A42', 'Air filter', 'Fan belt B30', 'Total'],
+    'new parts go above the Total row');
+});
+
+test('the app never takes over look-alike columns of yours, or clears them', () => {
+  const app = createApp({ now: '2026-09-28T10:00:00Z' }); // 6 AM in New York, before the reminder
+  const sheet = app.ss.insertSheet('Inventory');
+  sheet.getRange(1, 1, 1, 7).setValues([['Part Name', 'Quantity', 'Min Qty', 'Ordered', 'Alerted', 'Updated', 'Part ID']]);
+  sheet.getRange(2, 1, 2, 7).setValues([
+    ['Gasket', 1, 5, false, 'no', 'yes', 'G-1'],
+    ['Spring', 40, 5, 120, 'yes', 'yes', 'G-1'],
+  ]);
+  app.run('setup');
+  assert.deepEqual(sheet.dump()[0].slice(7), ['ID', 'Order Link', 'Ordered On', 'Alert Sent', 'Last Updated', 'Updated By'],
+    'the app adds its own columns instead of using yours');
+  const [gasket, spring] = app.run('apiGetData', ctx).parts;
+  assert.deepEqual([gasket.ordered, gasket.alerted, spring.ordered], [false, false, false]);
+  app.run('hourlyCheck');
+  adjust(app, spring.id, 'add', 1);
+  app.run('apiSendReminderNow', ctx);
+  assert.deepEqual(sheet.getRange(2, 4, 2, 4).getValues(), [[false, 'no', 'yes', 'G-1'], [120, 'yes', 'yes', 'G-1']],
+    'your columns are untouched');
+  assert.equal(app.env.sent.length, 2, 'an alert, and a reminder that lists the gasket as still to order');
+  assert.match(app.env.sent[1].subject, /Reminder: 1 part needs ordering/);
+});
+
+test('an unticked box or "no" in Ordered On does not count as ordered', () => {
+  const app = freshApp();
+  const part = addPart(app, { quantity: 1, minQty: 5 });
+  const sheet = app.sheet('Inventory');
+  const col = sheet.dump()[0].indexOf('Ordered On') + 1;
+  [false, 'no', 0].forEach((value) => {
+    sheet.getRange(2, col).setValue(value);
+    assert.equal(app.run('apiGetData', ctx).parts[0].ordered, false, JSON.stringify(value));
+  });
+  [true, 'yes', 'Oct 2'].forEach((value) => {
+    sheet.getRange(2, col).setValue(value);
+    assert.equal(app.run('apiGetData', ctx).parts[0].ordered, true, JSON.stringify(value));
+  });
+  assert.equal(part.id, 'P-0001');
+});
+
+test('the hourly check can\'t be used to keep the inventory busy', () => {
+  const app = freshApp();
+  app.as('');
+  app.run('hourlyCheck');
+  const first = app.env.props.LAST_CHECK;
+  assert.ok(first, 'one call from the page runs');
+  app.setTime('2026-09-28T10:05:00Z');
+  app.run('hourlyCheck');
+  app.run('hourlyCheck', { triggerUid: 'made-up' });
+  assert.equal(app.env.props.LAST_CHECK, first, 'more calls within 10 minutes do nothing');
+  app.context.hourlyCheck(app.triggerEvent('hourlyCheck'));
+  assert.notEqual(app.env.props.LAST_CHECK, first, 'the real hourly trigger always runs');
+});
+
+test('columns formatted as Plain text keep part numbers exactly, with no stray apostrophe', () => {
+  const app = freshApp();
+  const sheet = app.sheet('Inventory');
+  const headers = sheet.dump()[0];
+  ['Part Number', 'Part Name'].forEach((h) => sheet.getRange(2, headers.indexOf(h) + 1, 998, 1).setNumberFormat('@'));
+  const part = addPart(app, { name: '=cmd|calc', partNumber: '00123', location: '3-4' });
+  assert.equal(part.partNumber, '00123');
+  assert.equal(part.location, '3-4');
+  assert.deepEqual(sheet.formulas(), [], 'still no formulas');
+  const edited = app.run('apiSavePart', ctx, { id: part.id, partNumber: '0042-B' }).part;
+  assert.equal(edited.partNumber, '0042-B');
+});
+
+test('a very long list of low parts still fits in one email', () => {
+  const app = freshApp();
+  const sheet = app.sheet('Inventory');
+  const headers = sheet.dump()[0];
+  const rows = [];
+  for (let i = 1; i <= 200; i++) {
+    const row = headers.map(() => '');
+    row[headers.indexOf('Part Name')] = 'Bolt size ' + i;
+    row[headers.indexOf('Quantity')] = 1;
+    row[headers.indexOf('Min Qty')] = 10;
+    row[headers.indexOf('Order Link')] = 'https://www.example.com/bolt/' + i;
+    row[headers.indexOf('Notes')] = 'Some notes about this bolt that make the email a bit longer.';
+    rows.push(row.map((v) => (typeof v === 'string' && /\d/.test(v) ? "'" + v : v)));
+  }
+  sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  app.run('hourlyCheck');
+  assert.equal(app.env.sent.length, 1);
+  const mail = app.env.sent[0];
+  assert.match(mail.subject, /200 parts need ordering/);
+  assert.match(mail.htmlBody, /And 175 more/);
+  assert.match(mail.htmlBody, /Plus 25 more\. Open the app/);
+  assert.match(mail.body, /\.\.\.plus 25 more/);
+  assert.equal(app.run('apiGetData', ctx).parts.filter((p) => p.alerted).length, 200, 'every part counts as emailed');
 });
 
 test('new parts go right under the list, never over a totals row', () => {

@@ -19,10 +19,16 @@ const SRC_DIR = path.join(__dirname, '..', 'src');
 // Cells
 // ---------------------------------------------------------------------------
 
-/** Parses a value the way Sheets does when it is set with setValue(s). */
-function userEntered(value) {
+/**
+ * Parses a value the way Sheets does when it is set with setValue(s).
+ * In a cell formatted as Plain text ('@') text is kept exactly as written,
+ * leading apostrophe included, except that "=..." is still taken as a formula
+ * (the worst case, so tests catch any formula that gets through).
+ */
+function userEntered(value, format) {
   if (value === undefined) throw new Error('Cannot write undefined to a cell.');
   if (value === null || value === '') return null;
+  if (format === '@' && typeof value === 'string') return value[0] === '=' ? { f: value } : { v: value };
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new Error('Cannot write ' + value + ' to a cell.');
     return { v: value };
@@ -125,6 +131,7 @@ class FakeSheet {
     this.maxRows = rows;
     this.maxCols = cols;
     this.grid = [];
+    this.fmt = [];
     this.frozenRows = 0;
     this.rules = [];
     this.meta = {};
@@ -133,6 +140,8 @@ class FakeSheet {
   }
 
   cell(r, c) { return this.grid[r - 1] && this.grid[r - 1][c - 1]; }
+
+  format(r, c) { return (this.fmt[r - 1] && this.fmt[r - 1][c - 1]) || 'General'; }
 
   setCell(r, c, cell) {
     if (!this.grid[r - 1]) this.grid[r - 1] = [];
@@ -208,6 +217,7 @@ class FakeSheet {
 
   insertRowsAfter(after, n) {
     this.grid.splice(after, 0, ...Array.from({ length: n }, () => []));
+    this.fmt.splice(after, 0, ...Array.from({ length: n }, () => []));
     this.maxRows += n;
     return this;
   }
@@ -215,6 +225,7 @@ class FakeSheet {
 
   insertColumnsAfter(after, n) {
     this.grid.forEach((row) => { if (row) row.splice(after, 0, ...new Array(n)); });
+    this.fmt.forEach((row) => { if (row) row.splice(after, 0, ...new Array(n)); });
     this.maxCols += n;
     return this;
   }
@@ -223,6 +234,7 @@ class FakeSheet {
     if (row < 1 || row > this.maxRows) throw new Error('Row ' + row + ' is out of bounds.');
     if (this.maxRows - this.frozenRows <= 1) throw new Error('Sorry, it is not possible to delete all non-frozen rows.');
     this.grid.splice(row - 1, 1);
+    this.fmt.splice(row - 1, 1);
     this.maxRows -= 1;
     return this;
   }
@@ -252,7 +264,7 @@ class FakeSheet {
 }
 
 const FORMAT_METHODS = [
-  'setFontWeight', 'setFontColor', 'setBackground', 'setNumberFormat', 'setWrap', 'setWrapStrategy',
+  'setFontWeight', 'setFontColor', 'setBackground', 'setWrap', 'setWrapStrategy',
   'setHorizontalAlignment', 'setVerticalAlignment', 'setFontSize', 'setFontFamily', 'setNote',
 ];
 
@@ -316,13 +328,30 @@ class FakeRange {
           (Array.isArray(row) ? row.length : 'no') + ' but the range has ' + this.numCols + '.');
       }
     });
-    this.eachCell((r, c, i, j) => this.sheet.setCell(r, c, userEntered(values[i][j])));
+    this.eachCell((r, c, i, j) => this.sheet.setCell(r, c, userEntered(values[i][j], this.sheet.format(r, c))));
     return this;
   }
   setValue(value) {
-    this.eachCell((r, c) => this.sheet.setCell(r, c, userEntered(value)));
+    this.eachCell((r, c) => this.sheet.setCell(r, c, userEntered(value, this.sheet.format(r, c))));
     return this;
   }
+  setNumberFormat(format) {
+    if (typeof format !== 'string') throw new Error('setNumberFormat needs a string');
+    this.eachCell((r, c) => {
+      if (!this.sheet.fmt[r - 1]) this.sheet.fmt[r - 1] = [];
+      this.sheet.fmt[r - 1][c - 1] = format;
+    });
+    return this;
+  }
+  getNumberFormats() {
+    const out = [];
+    this.eachCell((r, c, i, j) => {
+      if (!out[i]) out[i] = [];
+      out[i][j] = this.sheet.format(r, c);
+    });
+    return out;
+  }
+  getNumberFormat() { return this.sheet.format(this.row, this.col); }
   clearContent() {
     this.eachCell((r, c) => this.sheet.setCell(r, c, null));
     return this;
@@ -577,6 +606,8 @@ function createApp(opts = {}) {
           if (typeof options[k] !== 'string' || !options[k]) throw new Error('sendEmail: missing ' + k);
         });
         if (env.mailFails) throw new Error(env.mailFails);
+        // Gmail's limit for a message body sent from Apps Script (free accounts).
+        if ((options.htmlBody || '').length + options.body.length > 200 * 1024) throw new Error('Argument too large: body');
         const recipients = options.to.split(',').length;
         if (recipients > env.quota - env.sent.length) throw new Error('Service invoked too many times for one day: email.');
         env.sent.push(Object.assign({}, options));
@@ -657,6 +688,12 @@ function createApp(opts = {}) {
     env,
     ss,
     context,
+    /** The event object a trigger of this script would pass (with its real triggerUid). */
+    triggerEvent(fn) {
+      const t = env.triggers.find((x) => x.fn === fn);
+      if (!t) throw new Error('No trigger for ' + fn);
+      return { triggerUid: t.id, authMode: 'FULL' };
+    },
     /** Calls a function from Code.js the way google.script.run would: arguments and result go through JSON. */
     run(name, ...args) {
       if (typeof context[name] !== 'function') throw new Error('No function ' + name + ' in Code.js');

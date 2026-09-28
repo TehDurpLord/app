@@ -26,13 +26,14 @@ const SHEET_NAMES = {
  * spaces and punctuation don't matter, and the aliases work too), so columns
  * can be moved around and any extra columns of your own are left alone.
  *   core:    added automatically when missing, because the app needs it
- *   managed: kept up to date by the app (grey header in the sheet)
+ *   managed: kept up to date by the app (grey header in the sheet). These only
+ *            match their exact header, never an alias, because the app writes
+ *            and clears them and must never take over a column of yours.
  * The other columns are optional: the app only shows them when they exist.
  */
 const FIELDS = [
   {
     key: 'id', header: 'ID', type: 'text', core: true, managed: true, width: 80,
-    aliases: ['Part ID', 'Item ID'],
     note: 'Assigned by the app. Leave it blank when you add a row by hand.',
   },
   {
@@ -93,21 +94,17 @@ const FIELDS = [
   },
   {
     key: 'orderedAt', header: 'Ordered On', type: 'date', core: true, managed: true, width: 110,
-    aliases: ['Ordered', 'Order Date', 'Date Ordered', 'On Order Since'],
     note: 'Set by "Mark as ordered" in the app. Cleared automatically once the part is restocked.',
   },
   {
     key: 'alertSentAt', header: 'Alert Sent', type: 'date', core: true, managed: true, width: 140,
-    aliases: ['Last Alert', 'Alerted', 'Alert Sent On'],
     note: 'When the low-stock email for this part went out. Cleared once the part is restocked, so the next time it runs low a new email goes out.',
   },
   {
     key: 'updatedAt', header: 'Last Updated', type: 'date', core: true, managed: true, width: 140,
-    aliases: ['Updated', 'Updated At', 'Last Modified', 'Modified'],
   },
   {
     key: 'updatedBy', header: 'Updated By', type: 'text', core: true, managed: true, width: 180,
-    aliases: ['Modified By', 'Last Updated By', 'Changed By'],
   },
 ];
 
@@ -153,7 +150,7 @@ const SETTINGS = [
   {
     key: 'appUrl', label: 'Web app URL', type: 'url', default: '',
     aliases: ['App URL', 'App link'],
-    help: 'Link to the web app, used in emails. Filled in automatically the first time the web app is opened.',
+    help: 'Link to the web app, used in emails. Filled in automatically the first time the web app is opened. If it stays empty, paste the web app URL (it ends in /exec) here.',
   },
 ];
 
@@ -173,6 +170,8 @@ const TRIGGER_HANDLERS = ['onInventoryEdit', 'hourlyCheck'];
 const TEXT_LIMITS = { name: 200, partNumber: 100, category: 100, location: 100, unit: 30, supplier: 150, notes: 2000 };
 const NUMBER_INPUTS = { quantity: 'Quantity', minQty: 'Min Qty', reorderQty: 'Reorder Qty', unitCost: 'Unit cost' };
 const MAX_LINKS = 5;
+const EMAIL_CARDS = 25; // parts shown in full in one email
+const EMAIL_LIST = 150; // parts listed by name after those (Gmail caps an email at about 200 KB)
 const MAX_ACCESS_FAILURES = 20;
 
 const COLORS = {
@@ -669,7 +668,15 @@ function handleInventoryEdit_(ss, e) {
 }
 
 /** Runs every hour: catches anything missed and sends the reminder email. */
-function hourlyCheck() {
+function hourlyCheck(e) {
+  // Public functions can also be called from the web app page. The hourly
+  // trigger and the owner run this freely; anyone else at most every 10
+  // minutes, so nobody can keep the inventory busy by calling it in a loop.
+  if (!isOwnTrigger_(e) && !currentUser_().isOwner) {
+    const cache = CacheService.getScriptCache();
+    if (cache.get('HOURLY_CHECK_CALLED')) return;
+    cache.put('HOURLY_CHECK_CALLED', '1', 600);
+  }
   const ss = getSpreadsheet_();
   if (!ss.getSheetByName(SHEET_NAMES.inventory)) return;
   withLock_(function () {
@@ -680,6 +687,13 @@ function hourlyCheck() {
     sendReminderIfDue_(ss, inv, settings, new Date());
     PropertiesService.getScriptProperties().setProperty(PROP.lastCheck, new Date().toISOString());
   });
+}
+
+/** True for the event of one of this script's own triggers. */
+function isOwnTrigger_(e) {
+  const uid = e && e.triggerUid ? String(e.triggerUid) : '';
+  if (!uid) return false;
+  return ScriptApp.getProjectTriggers().some(function (t) { return String(t.getUniqueId()) === uid; });
 }
 
 function installTriggers_(ss, force) {
@@ -876,10 +890,9 @@ function buildEmail_(ss, settings, parts, kind, extra) {
   subject = '[' + settings.appName + '] ' + subject;
 
   const font = '-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif';
-  const cards = parts.map(function (p) { return partCardHtml_(p, appUrl, tz); }).join('');
+  const cards = partsHtml_(parts, appUrl, tz);
   const orderedCards = onOrder.length
-    ? '<h2 style="font-size:16px;margin:24px 0 10px;color:#1f2937;">Already on order</h2>' +
-      onOrder.map(function (p) { return partCardHtml_(p, appUrl, tz); }).join('')
+    ? '<h2 style="font-size:16px;margin:24px 0 10px;color:#1f2937;">Already on order</h2>' + partsHtml_(onOrder, appUrl, tz)
     : '';
   const footerLinks = [
     appUrl ? linkHtml_(appUrl, 'Open the inventory app') : '',
@@ -900,14 +913,47 @@ function buildEmail_(ss, settings, parts, kind, extra) {
     '</div></div>';
 
   const lines = [heading, '', intro, ''];
-  parts.forEach(function (p) { lines.push(partText_(p), ''); });
+  pushPartsText_(lines, parts);
   if (onOrder.length) {
     lines.push('Already on order:', '');
-    onOrder.forEach(function (p) { lines.push(partText_(p), ''); });
+    pushPartsText_(lines, onOrder);
   }
   if (appUrl) lines.push('Inventory app: ' + appUrl);
   lines.push('Spreadsheet: ' + ss.getUrl(), '', footerNote);
   return { subject: subject, html: html, text: lines.join('\n') };
+}
+
+function partsHtml_(parts, appUrl, tz) {
+  const html = parts.slice(0, EMAIL_CARDS).map(function (p) { return partCardHtml_(p, appUrl, tz); }).join('');
+  const rest = parts.slice(EMAIL_CARDS);
+  if (!rest.length) return html;
+  const listed = rest.slice(0, EMAIL_LIST);
+  const items = listed.map(function (p) {
+    const name = p.links[0]
+      ? '<a href="' + escapeHtml_(p.links[0]) + '" style="color:' + COLORS.accent + ';">' + escapeHtml_(displayName_(p)) + '</a>'
+      : escapeHtml_(displayName_(p));
+    return '<li style="margin:0 0 6px;">' + name + ' <span style="color:#6b7280;">' + escapeHtml_(shortStock_(p)) + '</span></li>';
+  }).join('');
+  const more = rest.length - listed.length;
+  return html +
+    '<div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin:0 0 12px;">' +
+    '<div style="font-size:15px;font-weight:600;margin-bottom:8px;color:#111827;">And ' + rest.length + ' more</div>' +
+    '<ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.4;">' + items + '</ul>' +
+    (more ? '<div style="font-size:13px;color:#6b7280;margin-top:8px;">Plus ' + more + ' more. Open the app to see them all.</div>' : '') +
+    '</div>';
+}
+
+function pushPartsText_(lines, parts) {
+  parts.slice(0, EMAIL_CARDS).forEach(function (p) { lines.push(partText_(p), ''); });
+  const rest = parts.slice(EMAIL_CARDS);
+  rest.slice(0, EMAIL_LIST).forEach(function (p) { lines.push('* ' + displayName_(p) + ': ' + shortStock_(p)); });
+  if (rest.length > EMAIL_LIST) lines.push('...plus ' + (rest.length - EMAIL_LIST) + ' more. Open the app to see them all.');
+  if (rest.length) lines.push('');
+}
+
+function shortStock_(p) {
+  return (isOut_(p) ? 'out of stock' : formatQty_(p.quantity, p.unit) + ' left') +
+    (p.minQty !== null ? ' (min ' + formatNumber_(p.minQty) + ')' : '');
 }
 
 function partCardHtml_(p, appUrl, tz) {
@@ -1027,6 +1073,8 @@ function rowToPart_(row, cols, rowNumber, extraLinks) {
   const name = cellText_(get('name'));
   const partNumber = cellText_(get('partNumber'));
   if (!id && !name && !partNumber) return null;
+  // A "Total" row under the list isn't a part.
+  if (!id && !partNumber && /^(grand\s*|sub\s*)?totals?\s*:?$/i.test(name)) return null;
   const link = cellText_(get('link'));
   const links = [];
   const seen = {};
@@ -1058,10 +1106,10 @@ function rowToPart_(row, cols, rowNumber, extraLinks) {
     links: links.slice(0, MAX_LINKS),
     unitCost: toNumberOrNull_(get('unitCost')),
     notes: cellText_(get('notes')),
-    // Any value in these columns counts (someone may type "yes"); dates are kept when there are dates.
-    ordered: !isBlank_(orderedRaw),
+    // A date, a ticked box or text like "yes" counts as set; blank, unticked or "no" doesn't.
+    ordered: isMarked_(orderedRaw),
     orderedAt: toDateOrNull_(orderedRaw),
-    alerted: !isBlank_(alertRaw),
+    alerted: isMarked_(alertRaw),
     alertSentAt: toDateOrNull_(alertRaw),
     updatedAt: toDateOrNull_(get('updatedAt')),
     updatedBy: cellText_(get('updatedBy')),
@@ -1160,7 +1208,7 @@ function addColumns_(sheet, headerRow, fields) {
 function writeFields_(inv, row, fields) {
   const cells = Object.keys(fields)
     .filter(function (key) { return FIELD_BY_KEY[key] && inv.cols[key]; })
-    .map(function (key) { return { col: inv.cols[key], value: toCell_(key, fields[key]) }; })
+    .map(function (key) { return { key: key, col: inv.cols[key], value: fields[key] }; })
     .sort(function (a, b) { return a.col - b.col; });
   // One write per run of neighbouring columns keeps this fast without
   // touching any of your own columns in between.
@@ -1169,7 +1217,9 @@ function writeFields_(inv, row, fields) {
     let j = i;
     while (j + 1 < cells.length && cells[j + 1].col === cells[j].col + 1) j++;
     const run = cells.slice(i, j + 1);
-    inv.sheet.getRange(row, run[0].col, 1, run.length).setValues([run.map(function (c) { return c.value; })]);
+    const range = inv.sheet.getRange(row, run[0].col, 1, run.length);
+    const plain = plainTextCells_(range)[0];
+    range.setValues([run.map(function (c, k) { return toCell_(c.key, c.value, plain[k]); })]);
     i = j + 1;
   }
 }
@@ -1178,10 +1228,6 @@ function writeFields_(inv, row, fields) {
 function writeColumnValues_(inv, key, updates) {
   const col = inv.cols[key];
   if (!col || !updates.length) return;
-  if (updates.length === 1) {
-    inv.sheet.getRange(updates[0].row, col).setValue(toCell_(key, updates[0].value));
-    return;
-  }
   let min = Infinity;
   let max = -Infinity;
   updates.forEach(function (u) {
@@ -1189,17 +1235,44 @@ function writeColumnValues_(inv, key, updates) {
     max = Math.max(max, u.row);
   });
   const range = inv.sheet.getRange(min, col, max - min + 1, 1);
-  const block = range.getValues().map(function (r) { return [typeof r[0] === 'string' ? safeCell_(r[0]) : r[0]]; });
-  updates.forEach(function (u) { block[u.row - min][0] = toCell_(key, u.value); });
+  const plain = plainTextCells_(range);
+  if (updates.length === 1) {
+    range.setValue(toCell_(key, updates[0].value, plain[0][0]));
+    return;
+  }
+  const block = range.getValues().map(function (r, k) {
+    return [typeof r[0] === 'string' && !plain[k][0] ? safeCell_(r[0]) : r[0]];
+  });
+  updates.forEach(function (u) { block[u.row - min][0] = toCell_(key, u.value, plain[u.row - min][0]); });
   range.setValues(block);
 }
 
-function toCell_(key, value) {
+function toCell_(key, value, plainText) {
   const field = FIELD_BY_KEY[key];
   if (value === null || value === undefined || value === '') return '';
   if (field.type === 'number') return Number(value);
   if (field.type === 'date') return isDate_(value) ? value : new Date(value);
-  return safeCell_(String(value));
+  const text = String(value);
+  // Plain-text cells keep what's written as is, apostrophes included, so there
+  // only a leading "=" needs guarding.
+  if (plainText) return text.charAt(0) === '=' ? "'" + text : text;
+  return safeCell_(text);
+}
+
+/** Which cells are formatted as Plain text (Format > Number > Plain text). */
+function plainTextCells_(range) {
+  let formats = null;
+  try {
+    formats = range.getNumberFormats();
+  } catch (err) {
+    formats = null;
+  }
+  const out = [];
+  for (let r = 0; r < range.getNumRows(); r++) {
+    out.push([]);
+    for (let c = 0; c < range.getNumColumns(); c++) out[r].push(!!formats && formats[r][c] === '@');
+  }
+  return out;
 }
 
 /**
@@ -1917,6 +1990,14 @@ function displayName_(p) {
 
 function isDate_(value) {
   return Object.prototype.toString.call(value) === '[object Date]';
+}
+
+function isMarked_(value) {
+  if (value === true) return true;
+  if (isDate_(value)) return !isNaN(value.getTime());
+  if (typeof value === 'number') return value > 0;
+  if (typeof value === 'string') return !!value.trim() && !/^(no|n|false|0|none|-)$/i.test(value.trim());
+  return false;
 }
 
 function isBlank_(value) {
