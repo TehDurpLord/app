@@ -521,24 +521,29 @@ function createEnvironment(opts = {}) {
     SandboxMode: { IFRAME: 'IFRAME' },
     createHtmlOutput(html) { return new HtmlOutput(String(html)); },
     createHtmlOutputFromFile(name) { return new HtmlOutput(readHtml(name)); },
-    createTemplateFromFile(name) {
-      const source = readHtml(name);
-      const template = {
-        evaluate() {
-          // Only <?!= name ?> is used by the app. Anything else starting with
-          // "<?" would be read by Apps Script as template code, so fail loudly.
-          const out = source.replace(/<\?([\s\S]*?)\?>/g, (whole, inner) => {
-            const m = /^!=\s*([A-Za-z_$][\w$]*)\s*$/.exec(inner);
-            if (!m) throw new Error('Unexpected template tag in ' + name + '.html: ' + whole.slice(0, 40));
-            if (!(m[1] in template)) throw new Error('Template variable ' + m[1] + ' was not set');
-            return String(template[m[1]]);
-          });
-          return new HtmlOutput(out);
-        },
-      };
-      return template;
+    createTemplateFromFile(name) { return makeTemplate(readHtml(name), name + '.html'); },
+    createTemplate(html) {
+      if (typeof html !== 'string') throw new Error('createTemplate expects a string');
+      return makeTemplate(html, 'the template');
     },
   };
+
+  function makeTemplate(source, label) {
+    const template = {
+      evaluate() {
+        // Only <?!= name ?> is used by the app. Anything else starting with
+        // "<?" would be read by Apps Script as template code, so fail loudly.
+        const out = source.replace(/<\?([\s\S]*?)\?>/g, (whole, inner) => {
+          const m = /^!=\s*([A-Za-z_$][\w$]*)\s*$/.exec(inner);
+          if (!m) throw new Error('Unexpected template tag in ' + label + ': ' + whole.slice(0, 40));
+          if (!(m[1] in template)) throw new Error('Template variable ' + m[1] + ' was not set');
+          return String(template[m[1]]);
+        });
+        return new HtmlOutput(out);
+      },
+    };
+    return template;
+  }
 
   const makeTriggerBuilder = (fn) => {
     const trigger = { fn, id: 'trigger-' + (env.triggers.length + 1) + '-' + Math.random().toString(36).slice(2, 7) };
@@ -713,14 +718,14 @@ function makeApp(environment, lookup, extras) {
 
 /**
  * Creates a fresh fake Google environment and loads src/Code.js into it.
- * opts: see createEnvironment.
+ * opts: see createEnvironment, plus codeFile (defaults to src/Code.js).
  */
 function createApp(opts = {}) {
   const environment = createEnvironment(opts);
   const injected = Object.assign({}, environment.globals);
   const context = vm.createContext(environment.globals);
-  const code = fs.readFileSync(path.join(SRC_DIR, 'Code.js'), 'utf8');
-  vm.runInContext(code, context, { filename: 'Code.js' });
+  const file = opts.codeFile || path.join(SRC_DIR, 'Code.js');
+  vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: path.basename(file) });
   return makeApp(environment, (name) => context[name], {
     context,
     /** Runs any expression inside Code.js's scope (for constants and private helpers). */

@@ -699,3 +699,19 @@ test('helpers: header matching, links and safe cells', () => {
   assert.equal(safe(''), '');
   assert.equal(safe(5), 5);
 });
+
+test('install/Code.gs is up to date and works as the only file', () => {
+  const fs = require('fs');
+  const { buildBundle, OUT } = require('../dev/build-bundle');
+  assert.equal(fs.readFileSync(OUT, 'utf8'), buildBundle(), 'install/Code.gs is out of date: run npm run build');
+
+  const app = createApp({ codeFile: OUT, serviceUrl: 'https://script.google.com/macros/s/abc123/exec', now: '2026-09-28T10:00:00Z' });
+  app.run('setup');
+  const html = app.context.doGet({ parameter: {} }).getContent();
+  assert.match(html, /<div id="app" hidden>/);
+  assert.match(html, /const BOOT = \{"mode":"webapp"/);
+  const part = addPart(app, { quantity: 5, minQty: 3 });
+  adjust(app, part.id, 'remove', 2);
+  assert.equal(app.env.sent.length, 1, 'the low-stock email goes out');
+});
+

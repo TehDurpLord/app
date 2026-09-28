@@ -234,7 +234,11 @@ function doGet(e) {
 }
 
 function renderApp_(boot, title) {
-  const template = HtmlService.createTemplateFromFile('Index');
+  // The one-file install (install/Code.gs) carries the page in INDEX_HTML_;
+  // otherwise it's the Index.html file next to this one.
+  const template = typeof INDEX_HTML_ === 'string'
+    ? HtmlService.createTemplate(INDEX_HTML_)
+    : HtmlService.createTemplateFromFile('Index');
   template.bootJson = jsonForHtml_(jsonSafe_(boot));
   return template.evaluate().setTitle(title || 'Parts Inventory');
 }

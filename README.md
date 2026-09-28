@@ -45,13 +45,13 @@ Go to [sheets.new](https://sheets.new) to create a new Google Sheet, and give it
 
 ### 2. Add the code
 
+The whole app is one file, [`install/Code.gs`](install/Code.gs).
+
 1. In the spreadsheet, click **Extensions → Apps Script**. A code editor opens in a new tab with a file called `Code.gs`.
-2. Open [`src/Code.js`](src/Code.js) here on GitHub and click the **Copy raw file** button (the two squares at
-   the top right of the file).
-3. In the Apps Script editor, select everything in `Code.gs`, delete it, and paste.
-4. Click the **+** next to *Files*, choose **HTML**, and name it `Index` (exactly that; the editor adds `.html`).
-5. Copy [`src/Index.html`](src/Index.html) the same way, select everything in the new `Index.html` file, and paste over it.
-6. Click the save icon (💾), or press Ctrl+S / ⌘S.
+2. Open [`install/Code.gs`](install/Code.gs) here on GitHub and click the **Copy raw file** button (the two
+   squares at the top right of the file).
+3. In the Apps Script editor, click inside `Code.gs`, select everything (Ctrl+A / ⌘A), and paste (Ctrl+V / ⌘V).
+4. Click the save icon (💾), or press Ctrl+S / ⌘S.
 
 ### 3. Run setup
 
@@ -64,7 +64,9 @@ Go to [sheets.new](https://sheets.new) to create a new Google Sheet, and give it
 4. Setup creates three tabs (**Inventory**, **Settings** and **Activity Log**) and turns on the automatic checks.
    Low-stock emails go to your own address to start with. Change that in the **Settings** tab.
 
-You can already add parts right in the Inventory tab, or use **Inventory → Open in sidebar**.
+**Try it right away:** choose **Inventory → Open in sidebar**. The full app opens next to the spreadsheet,
+with no deploy step. Add a part with *Low-stock alert at* set to 3, tap **−** until it gets there, and the
+low-stock email arrives in your inbox. Step 4 is only needed to use the app from your phone or share it.
 
 ### 4. Put the app on your phone and computer
 
@@ -187,8 +189,8 @@ time to start using it.
 
 ## Changing the code later
 
-After pasting a new version of `Code.gs` or `Index.html`, the web app keeps running the old version until you
-publish the new one: **Deploy → Manage deployments → ✏️ edit → Version: New version → Deploy**. The URL stays
+To update, paste the new [`install/Code.gs`](install/Code.gs) over everything in `Code.gs` and save. The web
+app keeps running the old version until you publish the new one: **Deploy → Manage deployments → ✏️ edit → Version: New version → Deploy**. The URL stays
 the same. The spreadsheet menu and the automatic emails use the new code right away.
 
 ## Troubleshooting
@@ -210,6 +212,7 @@ the same. The spreadsheet menu and the automatic emails use the new code right a
 ## For developers
 
 ```
+install/Code.gs      The one file people paste into Apps Script (built from src/ by npm run build)
 src/Code.js          Server side (Apps Script): sheet access, web app API, alerts, emails, setup, triggers
 src/Index.html       The web app (HTML, CSS and plain JavaScript in one file; no external libraries)
 src/appsscript.json  Apps Script manifest
@@ -219,6 +222,7 @@ docs/                Screenshots for this README
 ```
 
 ```bash
+npm run build        # rebuild install/Code.gs after changing anything in src/ (the tests check it)
 npm test             # server tests; browser tests too when Playwright is installed
 npm run preview      # the full app at http://localhost:8080 with example data, no Google account needed
 ```

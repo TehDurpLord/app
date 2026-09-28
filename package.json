@@ -6,10 +6,11 @@
   "license": "UNLICENSED",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "build": "node dev/build-bundle.js",
     "preview": "node dev/preview.js",
+    "demo": "node dev/build-demo.js",
     "screenshots": "node dev/screenshots.js",
-    "push": "npx @google/clasp push",
-    "demo": "node dev/build-demo.js"
+    "push": "npx @google/clasp push"
   },
   "engines": {
     "node": ">=20"
