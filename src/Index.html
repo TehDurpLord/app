@@ -132,7 +132,8 @@
   .spin svg { animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 420px) { .hide-narrow { display: none; } #add-btn { padding: 0 11px; } }
-  @media (max-width: 360px) { .brand .logo, .tab svg { display: none; } .tab { padding: 10px 9px 9px; } }
+  @media (max-width: 440px) { .tab svg { display: none; } .tab { padding: 10px 10px 9px; } }
+  @media (max-width: 360px) { .brand .logo { display: none; } }
 
   /* ---------- Banners ---------- */
   .banner {
@@ -338,6 +339,7 @@
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; }
   .card h2 { margin: 0 0 2px; font-size: 17px; }
   .card .sub { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+  .card > :last-child { margin-bottom: 0; }
   .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
   .facts { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 14px; color: var(--text-2); }
   .facts li { display: flex; gap: 8px; align-items: flex-start; }
@@ -1514,7 +1516,7 @@
     syncHour();
     const appName = h('input', { id: 's-appname', maxlength: '60', disabled: off });
     appName.value = s.appName;
-    const code = h('input', { id: 's-code', maxlength: '64', disabled: off, autocomplete: 'off', spellcheck: 'false', placeholder: owner ? 'No code (anyone with the link can open it)' : (s.accessCodeSet ? 'Set' : 'Not set') });
+    const code = h('input', { id: 's-code', maxlength: '64', disabled: off, autocomplete: 'off', spellcheck: 'false', placeholder: owner ? 'Not set' : (s.accessCodeSet ? 'Set' : 'Not set') });
     code.value = s.accessCode;
     const appUrl = h('input', { id: 's-appurl', type: 'url', disabled: off, spellcheck: 'false', placeholder: 'Filled in when the web app is opened' });
     appUrl.value = s.appUrl;
