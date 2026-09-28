@@ -1,0 +1,1827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #f3f5f7;
+    --surface: #ffffff;
+    --surface-2: #f7f9fa;
+    --border: #e2e6ea;
+    --border-strong: #cdd4db;
+    --text: #16202a;
+    --text-2: #43505c;
+    --muted: #697684;
+    --accent: #0f766e;
+    --accent-hover: #0d625c;
+    --accent-soft: #e3f3f1;
+    --on-accent: #ffffff;
+    --ok: #177a3c;
+    --ok-soft: #e4f5ea;
+    --low: #a95306;
+    --low-soft: #fdf0d9;
+    --out: #b42318;
+    --out-soft: #fde8e6;
+    --ordered: #2952cc;
+    --ordered-soft: #e6ecfc;
+    --scrim: rgba(15, 23, 42, 0.46);
+    --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.07);
+    --shadow-lg: 0 18px 40px rgba(16, 24, 40, 0.2);
+    --radius: 12px;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1318;
+      --surface: #161c23;
+      --surface-2: #1b222a;
+      --border: #28313b;
+      --border-strong: #36414d;
+      --text: #e7ecf1;
+      --text-2: #b8c2cc;
+      --muted: #8d99a6;
+      --accent: #2eb3a3;
+      --accent-hover: #43c3b3;
+      --accent-soft: #113833;
+      --on-accent: #04201c;
+      --ok: #5ad48a;
+      --ok-soft: #133021;
+      --low: #f3b04c;
+      --low-soft: #3a2a11;
+      --out: #f7837a;
+      --out-soft: #3c1a18;
+      --ordered: #86a6ff;
+      --ordered-soft: #1a2750;
+      --scrim: rgba(0, 0, 0, 0.6);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+      --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.55);
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--font); }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { -webkit-tap-highlight-color: transparent; }
+  a { color: var(--accent); }
+  [hidden] { display: none !important; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  svg { flex: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .muted { color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand actions" "tabs tabs";
+    align-items: center; gap: 2px 12px; padding: 10px 16px 0;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .brand { grid-area: brand; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .logo {
+    width: 32px; height: 32px; border-radius: 9px; flex: none;
+    display: grid; place-items: center; background: var(--accent); color: var(--on-accent);
+  }
+  .brand h1 { margin: 0; font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .top-actions { grid-area: actions; display: flex; gap: 8px; align-items: center; }
+  .tabs { grid-area: tabs; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; margin: 0 -4px; }
+  .tab {
+    border: 0; background: none; cursor: pointer; white-space: nowrap;
+    padding: 10px 12px 9px; border-bottom: 2px solid transparent;
+    color: var(--muted); font-weight: 600; display: inline-flex; align-items: center; gap: 7px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  @media (min-width: 760px) {
+    .topbar { grid-template-columns: auto 1fr auto; grid-template-areas: "brand tabs actions"; height: 62px; padding: 0 24px; gap: 24px; }
+    .tabs { align-self: stretch; margin: 0; }
+    .tab { padding: 0 12px; }
+  }
+
+  main { max-width: 1140px; margin: 0 auto; padding: 16px 16px 96px; }
+  @media (min-width: 760px) { main { padding: 24px 24px 80px; } }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 40px; padding: 0 14px; border-radius: 9px; cursor: pointer; white-space: nowrap;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    font-weight: 600; text-decoration: none; transition: background 0.12s, border-color 0.12s;
+  }
+  .btn:hover { background: var(--surface-2); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn.subtle { border-color: transparent; background: transparent; color: var(--text-2); }
+  .btn.subtle:hover { background: var(--surface-2); }
+  .btn.danger { color: var(--out); }
+  .btn.danger-fill { background: var(--out); border-color: var(--out); color: #fff; }
+  .btn.small { min-height: 32px; padding: 0 10px; font-size: 14px; border-radius: 8px; }
+  .btn.block { width: 100%; }
+  .btn:disabled { opacity: 0.55; cursor: default; }
+  .icon-btn {
+    width: 40px; height: 40px; flex: none; display: inline-grid; place-items: center; cursor: pointer;
+    border-radius: 9px; border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
+    text-decoration: none;
+  }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+  .spin svg { animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 420px) { .hide-narrow { display: none; } #add-btn { padding: 0 11px; } }
+  @media (max-width: 360px) { .brand .logo, .tab svg { display: none; } .tab { padding: 10px 9px 9px; } }
+
+  /* ---------- Banners ---------- */
+  .banner {
+    display: flex; gap: 10px; align-items: flex-start; padding: 11px 14px; margin-bottom: 12px;
+    border-radius: 10px; border: 1px solid var(--border); background: var(--surface); font-size: 14px;
+  }
+  .banner.warn { background: var(--low-soft); border-color: transparent; }
+  .banner.warn > svg { color: var(--low); }
+  .banner.error { background: var(--out-soft); border-color: transparent; }
+  .banner.error > svg { color: var(--out); }
+  .banner.info > svg { color: var(--accent); }
+  .banner .grow { flex: 1; min-width: 0; }
+  .banner .banner-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .banner .close { background: none; border: 0; padding: 2px; cursor: pointer; color: var(--muted); }
+
+  /* ---------- Stats and filters ---------- */
+  .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  @media (min-width: 640px) { .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; } }
+  .stat {
+    text-align: left; cursor: pointer; padding: 12px 14px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow);
+  }
+  .stat:hover { border-color: var(--border-strong); }
+  .stat[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  @media (max-width: 520px) { .stat { padding: 10px 12px; } .stat .stat-num { font-size: 22px !important; } }
+  .stat .stat-num { display: block; font-size: 26px; font-weight: 750; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .stat .stat-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
+  .stat.low .stat-num { color: var(--low); }
+  .stat.out .stat-num { color: var(--out); }
+  .stat.ordered .stat-num { color: var(--ordered); }
+  .stat.zero .stat-num { color: var(--muted); }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .search { position: relative; flex: 1 1 260px; display: flex; align-items: center; }
+  .search > span[data-icon] { position: absolute; left: 12px; top: 0; bottom: 0; display: flex; align-items: center; color: var(--muted); pointer-events: none; }
+  .search input {
+    width: 100%; height: 42px; padding: 0 12px 0 38px; border-radius: 10px;
+    border: 1px solid var(--border-strong); background: var(--surface);
+  }
+  .toolbar select {
+    height: 42px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface);
+    padding: 0 10px; flex: 1 1 140px; max-width: 220px; min-width: 0;
+  }
+  @media (max-width: 520px) { .toolbar select { max-width: none; } }
+
+  /* ---------- Parts list ---------- */
+  .list { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .list-head { display: none; }
+  .row {
+    position: relative; display: grid; gap: 8px 12px; padding: 12px 14px 12px 18px;
+    grid-template-columns: minmax(0, 1fr) auto 38px; grid-template-areas: "main main link" "info stock stock";
+    border-top: 1px solid var(--border);
+  }
+  .row:first-child { border-top: 0; }
+  .row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+  .row.status-low::before { background: var(--low); }
+  .row.status-out::before { background: var(--out); }
+  .row.flash { animation: flash 1.4s ease-out; }
+  @keyframes flash { from { background: var(--accent-soft); } to { background: transparent; } }
+  .row-main { grid-area: main; min-width: 0; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+  .row-main:hover .name { text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+  .row-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+  .row-title .name { font-weight: 650; overflow-wrap: anywhere; }
+  .row-meta { margin-top: 2px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .row-loc { display: none; }
+  .row-info { grid-area: info; align-self: center; color: var(--muted); font-size: 13px; }
+  .row-stock { grid-area: stock; justify-self: end; }
+  .row-link { grid-area: link; align-self: start; }
+  .row-link .icon-btn { width: 38px; height: 38px; color: var(--accent); }
+  .row-link .placeholder { display: block; width: 38px; }
+  @media (min-width: 760px) {
+    .list-head, .row {
+      grid-template-columns: minmax(0, 1fr) minmax(90px, 150px) 110px 186px 40px;
+      grid-template-areas: "main loc info stock link";
+    }
+    .list-head {
+      display: grid; gap: 12px; padding: 10px 16px 10px 20px; background: var(--surface-2);
+      border-bottom: 1px solid var(--border); color: var(--muted);
+      font-size: 12px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .list-head .right { text-align: right; }
+    .row { align-items: center; padding: 10px 16px 10px 20px; }
+    .row-info { color: var(--text-2); font-size: 14px; font-variant-numeric: tabular-nums; }
+    .row-info .info-label { display: none; }
+    .row-loc { display: block; grid-area: loc; color: var(--text-2); font-size: 14px; overflow-wrap: anywhere; }
+    .row-link { align-self: center; }
+    .meta-loc { display: none; }
+  }
+
+  .stepper {
+    display: inline-flex; align-items: stretch; overflow: hidden;
+    border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface);
+  }
+  .step {
+    width: 42px; height: 42px; border: 0; background: var(--surface-2); color: var(--text-2);
+    display: grid; place-items: center; cursor: pointer; touch-action: manipulation;
+  }
+  .step:hover { color: var(--text); background: var(--border); }
+  .step:disabled { opacity: 0.4; cursor: default; background: var(--surface-2); }
+  .qty {
+    min-width: 88px; padding: 0 6px; display: flex; align-items: baseline; justify-content: center; gap: 4px;
+    align-self: center; font-variant-numeric: tabular-nums; position: relative;
+  }
+  .qty strong { font-size: 17px; }
+  .qty small { color: var(--muted); font-size: 12px; }
+  .qty.saving strong { opacity: 0.55; }
+  .qty.saving::after {
+    content: ""; position: absolute; right: 5px; top: 50%; width: 6px; height: 6px; margin-top: -3px;
+    border-radius: 50%; background: var(--accent); animation: pulse 0.9s ease-in-out infinite alternate;
+  }
+  @keyframes pulse { from { opacity: 0.25; } to { opacity: 1; } }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px;
+    font-size: 12px; font-weight: 700; line-height: 20px; white-space: nowrap;
+  }
+  .badge.low { background: var(--low-soft); color: var(--low); }
+  .badge.out { background: var(--out-soft); color: var(--out); }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); }
+  .badge.ordered { background: var(--ordered-soft); color: var(--ordered); }
+
+  .more { display: flex; justify-content: center; padding: 14px; border-top: 1px solid var(--border); }
+  .empty { padding: 44px 20px; text-align: center; color: var(--muted); }
+  .empty .empty-icon {
+    width: 52px; height: 52px; margin: 0 auto 12px; border-radius: 14px; display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .empty h3 { margin: 0 0 4px; color: var(--text); font-size: 17px; }
+  .empty p { margin: 0 auto 16px; max-width: 420px; }
+
+  .skeleton { padding: 16px 18px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+  .skeleton:first-child { border-top: 0; }
+  .bar { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2), var(--border), var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  /* ---------- Part drawer ---------- */
+  .drawer { position: fixed; inset: 0; z-index: 40; }
+  .drawer-backdrop { position: absolute; inset: 0; background: var(--scrim); animation: fade 0.15s ease-out; }
+  .drawer-panel {
+    position: absolute; top: 0; right: 0; bottom: 0; width: min(470px, 100%);
+    display: flex; flex-direction: column; background: var(--surface); box-shadow: var(--shadow-lg);
+    animation: slide-in 0.2s ease-out;
+  }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes slide-in { from { transform: translateX(24px); opacity: 0.4; } }
+  .drawer-head { display: flex; gap: 12px; align-items: flex-start; padding: 16px 16px 14px 20px; border-bottom: 1px solid var(--border); }
+  .drawer-head .grow { flex: 1; min-width: 0; }
+  .drawer-head h2 { margin: 2px 0 4px; font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; }
+  .eyebrow { color: var(--muted); font-size: 13px; font-weight: 600; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 16px 20px 32px; display: grid; gap: 18px; align-content: start; }
+
+  .stock-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); padding: 16px; display: grid; gap: 14px; }
+  .stock-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .stock-big { font-size: 36px; font-weight: 750; line-height: 1; font-variant-numeric: tabular-nums; }
+  .stock-big small { font-size: 16px; font-weight: 600; color: var(--muted); margin-left: 4px; }
+  .stock-card.status-low .stock-big { color: var(--low); }
+  .stock-card.status-out .stock-big { color: var(--out); }
+  .stock-levels { color: var(--muted); font-size: 13px; text-align: right; }
+  .segmented { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--border-strong); border-radius: 9px; overflow: hidden; }
+  .segmented button { border: 0; border-left: 1px solid var(--border-strong); background: var(--surface); padding: 8px 6px; font-weight: 600; cursor: pointer; }
+  .segmented button:first-child { border-left: 0; }
+  .segmented button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+  .adjust-row { display: grid; grid-template-columns: 110px 1fr; gap: 8px; }
+  .adjust-row input { height: 42px; border: 1px solid var(--border-strong); border-radius: 9px; padding: 0 12px; background: var(--surface); width: 100%; min-width: 0; }
+  .adjust-preview { font-size: 13px; color: var(--muted); min-height: 19px; }
+
+  .order-links { display: grid; gap: 8px; }
+  .order-links a.btn { justify-content: space-between; }
+  .order-links .btn span { overflow: hidden; text-overflow: ellipsis; }
+  .ordered-note { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-radius: 10px; background: var(--ordered-soft); color: var(--ordered); font-weight: 600; font-size: 14px; }
+  .ordered-note .grow { flex: 1; }
+
+  .details { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 9px 12px; margin: 0; font-size: 14px; }
+  .details dt { color: var(--muted); }
+  .details dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .section-title { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 8px; }
+  .drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  /* ---------- Activity ---------- */
+  .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .page-head h2 { margin: 0; font-size: 20px; }
+  .timeline { list-style: none; margin: 0; padding: 0; }
+  .card-list { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .act { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 12px 14px; border-top: 1px solid var(--border); }
+  .act:first-child { border-top: 0; }
+  .act-icon { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--text-2); }
+  .act.used .act-icon { background: var(--low-soft); color: var(--low); }
+  .act.restocked .act-icon, .act.added .act-icon { background: var(--ok-soft); color: var(--ok); }
+  .act.alert .act-icon { background: var(--accent-soft); color: var(--accent); }
+  .act.deleted .act-icon { background: var(--out-soft); color: var(--out); }
+  .act.ordered .act-icon { background: var(--ordered-soft); color: var(--ordered); }
+  .act-line { overflow-wrap: anywhere; }
+  .act-line a, .link-btn { color: var(--text); font-weight: 650; text-decoration: none; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+  .act-line a:hover, .link-btn:hover { text-decoration: underline; }
+  .act-sub { color: var(--muted); font-size: 13px; margin-top: 1px; }
+  .chg { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .chg.neg { color: var(--low); }
+  .chg.pos { color: var(--ok); }
+  .drawer .card-list { box-shadow: none; }
+
+  /* ---------- Settings ---------- */
+  .settings { display: grid; gap: 16px; max-width: 780px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; }
+  .card h2 { margin: 0 0 2px; font-size: 17px; }
+  .card .sub { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+  .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+  .facts { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 14px; color: var(--text-2); }
+  .facts li { display: flex; gap: 8px; align-items: flex-start; }
+  .facts svg { margin-top: 2px; color: var(--muted); }
+
+  /* ---------- Forms ---------- */
+  .form-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  @media (min-width: 620px) { .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); } .span-2 { grid-column: 1 / -1; } }
+  .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .field > label, .field > .label { font-size: 13px; font-weight: 650; color: var(--text-2); }
+  .field .req { color: var(--out); }
+  .field input, .field select, .field textarea {
+    width: 100%; height: 42px; padding: 0 12px; border-radius: 9px;
+    border: 1px solid var(--border-strong); background: var(--surface);
+  }
+  .field textarea { height: auto; min-height: 66px; padding: 10px 12px; resize: vertical; line-height: 1.4; }
+  .field input:disabled, .field select:disabled, .field textarea:disabled { background: var(--surface-2); color: var(--muted); }
+  .field input[aria-invalid="true"] { border-color: var(--out); }
+  .hint { font-size: 12.5px; color: var(--muted); }
+  .hint.warn { color: var(--low); }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .inline > * { flex: 1; min-width: 0; }
+  .form-error { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; background: var(--out-soft); color: var(--out); font-size: 14px; font-weight: 600; margin-bottom: 14px; }
+  .switch { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .switch .track { flex: none; width: 42px; height: 24px; border-radius: 999px; background: var(--border-strong); position: relative; transition: background 0.15s; margin-top: 1px; }
+  .switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3); transition: transform 0.15s; }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::after { transform: translateX(18px); }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .switch input:disabled + .track { opacity: 0.5; }
+  .switch .switch-text { display: grid; gap: 2px; }
+  .switch .switch-text b { font-weight: 650; }
+
+  /* ---------- Dialogs ---------- */
+  dialog.modal {
+    width: min(660px, calc(100% - 24px)); max-height: calc(100% - 24px); padding: 0; border: 0; border-radius: 16px;
+    background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg);
+  }
+  dialog.modal.small { width: min(420px, calc(100% - 24px)); }
+  dialog.modal::backdrop { background: var(--scrim); }
+  dialog.modal[open] { display: flex; flex-direction: column; animation: pop 0.16s ease-out; }
+  @keyframes pop { from { transform: translateY(8px) scale(0.99); opacity: 0; } }
+  .modal form { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 14px 20px; border-bottom: 1px solid var(--border); }
+  .modal-head h2 { margin: 0; font-size: 18px; }
+  .modal-body { padding: 18px 20px; overflow-y: auto; min-height: 0; flex: 1; }
+  .modal-body p { margin: 0; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  @media (max-width: 620px) {
+    dialog.modal:not(.small) { width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin: 0; border-radius: 0; }
+  }
+
+  /* ---------- Lock screen, fatal error ---------- */
+  .screen { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+  .screen-card { width: min(400px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-lg); padding: 28px 24px; text-align: center; }
+  .screen-card h1 { margin: 12px 0 4px; font-size: 20px; }
+  .screen-card p { margin: 0 0 18px; color: var(--muted); }
+  .screen-card .logo { width: 48px; height: 48px; border-radius: 14px; margin: 0 auto; }
+  .screen-card form { display: grid; gap: 10px; text-align: left; }
+  .screen-card input { width: 100%; height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface); font-size: 16px; }
+  .screen-card .error-text { color: var(--out); font-size: 14px; min-height: 20px; }
+  .screen-card pre { text-align: left; white-space: pre-wrap; background: var(--surface-2); border-radius: 8px; padding: 10px; font-size: 13px; color: var(--text-2); }
+
+  /* ---------- Toasts ---------- */
+  .toasts { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 80; width: min(460px, calc(100% - 24px)); display: grid; gap: 8px; pointer-events: none; }
+  .toast {
+    pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px 11px 14px;
+    border-radius: 11px; background: #1d2731; color: #f3f6f9; box-shadow: var(--shadow-lg); font-size: 14px;
+    animation: rise 0.18s ease-out;
+  }
+  .toast.error { background: #9f1f16; color: #fff; }
+  .toast .grow { flex: 1; min-width: 0; padding-top: 1px; overflow-wrap: anywhere; }
+  .toast button { background: none; border: 0; color: inherit; opacity: 0.75; cursor: pointer; padding: 1px; }
+  .toast.leaving { opacity: 0; transform: translateY(6px); transition: all 0.2s; }
+  @keyframes rise { from { transform: translateY(10px); opacity: 0; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" data-icon="box" aria-hidden="true"></span>
+      <h1 id="app-name">Parts Inventory</h1>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" data-view="inventory" data-icon="list" aria-selected="true">Inventory</button>
+      <button class="tab" role="tab" data-view="activity" data-icon="history" aria-selected="false">Activity</button>
+      <button class="tab" role="tab" data-view="settings" data-icon="sliders" aria-selected="false">Settings</button>
+    </nav>
+    <div class="top-actions">
+      <button class="icon-btn" id="refresh-btn" type="button" title="Refresh" aria-label="Refresh" data-icon="refresh"></button>
+      <button class="btn primary" id="add-btn" type="button" data-icon="plus"><span class="hide-narrow">Add part</span></button>
+    </div>
+  </header>
+
+  <main>
+    <section id="view-inventory" aria-label="Inventory">
+      <div id="banners"></div>
+      <div class="stats" id="stats"></div>
+      <div class="toolbar">
+        <label class="search">
+          <span data-icon="search"></span>
+          <span class="sr-only">Search parts</span>
+          <input id="search" type="search" placeholder="Search name, part #, location, supplier…" autocomplete="off" enterkeyhint="search">
+        </label>
+        <select id="category-filter" aria-label="Category"></select>
+        <select id="sort" aria-label="Sort by">
+          <option value="name">Sort: Name</option>
+          <option value="status">Sort: Needs attention</option>
+          <option value="qty">Sort: Fewest on hand</option>
+          <option value="location">Sort: Location</option>
+          <option value="updated">Sort: Recently changed</option>
+        </select>
+      </div>
+      <div id="list" class="list" aria-live="polite"></div>
+    </section>
+
+    <section id="view-activity" aria-label="Activity" hidden>
+      <div class="page-head">
+        <h2>Recent activity</h2>
+        <button class="btn small" id="activity-refresh" type="button" data-icon="refresh">Refresh</button>
+      </div>
+      <div id="activity"></div>
+    </section>
+
+    <section id="view-settings" aria-label="Settings" hidden>
+      <div id="settings" class="settings"></div>
+    </section>
+  </main>
+</div>
+
+<div id="drawer" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close-drawer></div>
+  <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title" id="drawer-panel"></aside>
+</div>
+
+<dialog id="part-dialog" class="modal" aria-labelledby="part-dialog-title">
+  <form id="part-form" novalidate>
+    <div class="modal-head">
+      <h2 id="part-dialog-title">Add part</h2>
+      <button class="icon-btn" type="button" data-close-dialog aria-label="Close" data-icon="x"></button>
+    </div>
+    <div class="modal-body">
+      <div id="part-form-error" class="form-error" role="alert" hidden></div>
+      <div class="form-grid two">
+        <div class="field span-2">
+          <label for="f-name">Part name <span class="req">*</span></label>
+          <input id="f-name" name="name" maxlength="200" required autocomplete="off" placeholder="e.g. M3 × 8 socket head screw">
+        </div>
+        <div class="field" data-field="partNumber">
+          <label for="f-partNumber">Part number</label>
+          <input id="f-partNumber" name="partNumber" maxlength="100" autocomplete="off" placeholder="SKU or manufacturer #">
+          <span class="hint warn" id="dup-hint" hidden></span>
+        </div>
+        <div class="field" data-field="category">
+          <label for="f-category">Category</label>
+          <input id="f-category" name="category" maxlength="100" list="dl-category" autocomplete="off" placeholder="e.g. Fasteners">
+        </div>
+        <div class="field" data-field="location">
+          <label for="f-location">Location</label>
+          <input id="f-location" name="location" maxlength="100" list="dl-location" autocomplete="off" placeholder="e.g. Bin A-12">
+        </div>
+        <div class="field" data-field="supplier">
+          <label for="f-supplier">Supplier</label>
+          <input id="f-supplier" name="supplier" maxlength="150" list="dl-supplier" autocomplete="off" placeholder="e.g. McMaster-Carr">
+        </div>
+        <div class="field">
+          <label for="f-quantity">Quantity on hand <span class="req">*</span></label>
+          <div class="inline">
+            <input id="f-quantity" name="quantity" type="number" inputmode="decimal" min="0" step="any" required>
+            <input id="f-unit" name="unit" maxlength="30" list="dl-unit" autocomplete="off" placeholder="Unit (ea)" aria-label="Unit" data-field="unit">
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-minQty">Low-stock alert at</label>
+          <input id="f-minQty" name="minQty" type="number" inputmode="decimal" min="0" step="any" placeholder="Leave blank for no alert">
+          <span class="hint">Emails go out when the quantity drops to this number or below.</span>
+        </div>
+        <div class="field" data-field="reorderQty">
+          <label for="f-reorderQty">Reorder quantity</label>
+          <input id="f-reorderQty" name="reorderQty" type="number" inputmode="decimal" min="0" step="any" placeholder="How many to order">
+        </div>
+        <div class="field" data-field="unitCost">
+          <label for="f-unitCost">Unit cost</label>
+          <input id="f-unitCost" name="unitCost" type="number" inputmode="decimal" min="0" step="any" placeholder="Optional">
+        </div>
+        <div class="field span-2">
+          <label for="f-link">Order link</label>
+          <textarea id="f-link" name="link" rows="2" autocomplete="off" spellcheck="false" placeholder="https://www.supplier.com/product-page"></textarea>
+          <span class="hint">The page to reorder from. It's included in the low-stock email. Put a backup supplier on a second line.</span>
+        </div>
+        <div class="field span-2" data-field="notes">
+          <label for="f-notes">Notes</label>
+          <textarea id="f-notes" name="notes" rows="2" maxlength="2000"></textarea>
+        </div>
+      </div>
+      <datalist id="dl-category"></datalist>
+      <datalist id="dl-location"></datalist>
+      <datalist id="dl-supplier"></datalist>
+      <datalist id="dl-unit"></datalist>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" type="button" data-close-dialog>Cancel</button>
+      <button class="btn primary" type="submit" id="part-save">Save part</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="confirm-dialog" class="modal small" aria-labelledby="confirm-title">
+  <div class="modal-head"><h2 id="confirm-title">Are you sure?</h2></div>
+  <div class="modal-body"><p id="confirm-message"></p></div>
+  <div class="modal-foot">
+    <button class="btn" type="button" id="confirm-cancel">Cancel</button>
+    <button class="btn primary" type="button" id="confirm-ok">OK</button>
+  </div>
+</dialog>
+
+<dialog id="name-dialog" class="modal small" aria-labelledby="name-title">
+  <form id="name-form">
+    <div class="modal-head"><h2 id="name-title">What's your name?</h2></div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="name-input">Your changes are logged under this name. It's saved on this device only.</label>
+        <input id="name-input" maxlength="60" autocomplete="name" placeholder="e.g. Sam R.">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" type="button" id="name-skip">Not now</button>
+      <button class="btn primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="screen" class="screen" hidden></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script>const BOOT = <?!= bootJson ?>;</script>
+<script>
+(function () {
+  'use strict';
+
+  // -------------------------------------------------------------------------
+  // Small helpers
+  // -------------------------------------------------------------------------
+
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+  /** Builds DOM nodes. Text is always inserted as text, never as HTML. */
+  function h(tag, attrs, ...children) {
+    const el = document.createElement(tag);
+    Object.keys(attrs || {}).forEach((key) => {
+      const v = attrs[key];
+      if (v === null || v === undefined || v === false) return;
+      if (key === 'class') el.className = v;
+      else if (key.slice(0, 2) === 'on' && typeof v === 'function') el.addEventListener(key.slice(2), v);
+      else if (v === true) el.setAttribute(key, '');
+      else el.setAttribute(key, String(v));
+    });
+    add(el, children);
+    return el;
+  }
+  function add(el, children) {
+    children.forEach((child) => {
+      if (child === null || child === undefined || child === false || child === '') return;
+      if (Array.isArray(child)) add(el, child);
+      else el.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
+    });
+    return el;
+  }
+  function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); return el; }
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const ICONS = {
+    plus: [['path', 'M12 5v14M5 12h14']],
+    minus: [['path', 'M5 12h14']],
+    search: [['circle', 11, 11, 7], ['path', 'M20 20l-3.6-3.6']],
+    refresh: [['path', 'M20 12a8 8 0 1 1-2.34-5.66L20 8.7'], ['path', 'M20 3.5v5.2h-5.2']],
+    x: [['path', 'M18 6L6 18M6 6l12 12']],
+    box: [['path', 'M21 8l-9-5-9 5v8l9 5 9-5V8z'], ['path', 'M3.3 7.7L12 12.6l8.7-4.9M12 12.6V21']],
+    external: [['path', 'M14 4h6v6M20 4l-9 9'], ['path', 'M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5']],
+    cart: [['circle', 9, 20, 1.4], ['circle', 18, 20, 1.4], ['path', 'M2.5 3.5h2.8l2.6 11.3a1 1 0 0 0 1 .8h9.3a1 1 0 0 0 1-.8L21 7.5H6.2']],
+    pin: [['path', 'M12 21s-6.5-5.8-6.5-11A6.5 6.5 0 0 1 18.5 10C18.5 15.2 12 21 12 21z'], ['circle', 12, 10, 2.3]],
+    edit: [['path', 'M4 20h4L19 9l-4-4L4 16v4z'], ['path', 'M13.5 6.5l4 4']],
+    trash: [['path', 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3']],
+    truck: [['path', 'M2.5 6.5h11v9.5h-11zM13.5 10h4.2l3 3.2V16h-7.2'], ['circle', 7, 18, 1.8], ['circle', 17, 18, 1.8]],
+    mail: [['rect', 3, 5, 18, 14, 2], ['path', 'M3.5 7l8.5 6 8.5-6']],
+    clock: [['circle', 12, 12, 9], ['path', 'M12 7.5V12l3 2']],
+    alert: [['path', 'M10.3 4.2L2.6 18a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z'], ['path', 'M12 9.5v4M12 17h.01']],
+    check: [['path', 'M5 12.5l4.5 4.5L19 7.5']],
+    link: [['path', 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1'], ['path', 'M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1']],
+    lock: [['rect', 5, 11, 14, 10, 2], ['path', 'M8 11V7.5a4 4 0 0 1 8 0V11']],
+    sheet: [['rect', 3.5, 3.5, 17, 17, 2], ['path', 'M3.5 9.5h17M3.5 15h17M9.5 3.5v17']],
+    sliders: [['path', 'M4 6.5h9M17 6.5h3M4 12h3M11 12h9M4 17.5h11M19 17.5h1'], ['circle', 15, 6.5, 2], ['circle', 9, 12, 2], ['circle', 17, 17.5, 2]],
+    history: [['path', 'M3.5 12a8.5 8.5 0 1 0 2.5-6'], ['path', 'M3.5 4v4.5H8'], ['path', 'M12 8v4.3l3 1.8']],
+    list: [['path', 'M9 6.5h11M9 12h11M9 17.5h11'], ['circle', 4.5, 6.5, 1], ['circle', 4.5, 12, 1], ['circle', 4.5, 17.5, 1]],
+    copy: [['rect', 8.5, 8.5, 12, 12, 2], ['path', 'M15.5 8.5V6a2 2 0 0 0-2-2h-7.5a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5']],
+    user: [['circle', 12, 8, 4], ['path', 'M4.5 20.5a7.5 7.5 0 0 1 15 0']],
+    info: [['circle', 12, 12, 9], ['path', 'M12 11v5.5M12 7.8v.2']],
+    send: [['path', 'M21 3L10 14'], ['path', 'M21 3l-6.5 18-4.5-7-7-4.5L21 3z']],
+    tag: [['path', 'M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z'], ['circle', 7.5, 7.5, 1.4]],
+  };
+
+  function icon(name, size) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    const s = String(size || 18);
+    [['viewBox', '0 0 24 24'], ['width', s], ['height', s], ['fill', 'none'], ['stroke', 'currentColor'],
+      ['stroke-width', '2'], ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true'],
+      ['focusable', 'false']].forEach((a) => svg.setAttribute(a[0], a[1]));
+    (ICONS[name] || []).forEach((shape) => {
+      const el = document.createElementNS(SVG_NS, shape[0]);
+      if (shape[0] === 'path') el.setAttribute('d', shape[1]);
+      if (shape[0] === 'circle') { el.setAttribute('cx', shape[1]); el.setAttribute('cy', shape[2]); el.setAttribute('r', shape[3]); }
+      if (shape[0] === 'rect') {
+        el.setAttribute('x', shape[1]); el.setAttribute('y', shape[2]); el.setAttribute('width', shape[3]);
+        el.setAttribute('height', shape[4]); el.setAttribute('rx', shape[5] || 0);
+      }
+      svg.appendChild(el);
+    });
+    return svg;
+  }
+
+  function fmt(n) {
+    if (n === null || n === undefined || n === '' || isNaN(n)) return '—';
+    return (Math.round(Number(n) * 1000) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 });
+  }
+  function fmtMoney(n) {
+    return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  }
+  function round(n) { return Math.round(n * 1000) / 1000; }
+  function toDate(iso) { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d : null; }
+  function fmtDate(iso, withTime) {
+    const d = toDate(iso);
+    if (!d) return '';
+    const opts = { month: 'short', day: 'numeric' };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+    if (withTime) { opts.hour = 'numeric'; opts.minute = '2-digit'; }
+    return d.toLocaleString(undefined, opts);
+  }
+  function timeAgo(iso) {
+    const d = toDate(iso);
+    if (!d) return '';
+    const s = Math.round((Date.now() - d.getTime()) / 1000);
+    if (s < 45) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' hr ago';
+    if (s < 86400 * 6) return Math.round(s / 86400) + ' d ago';
+    return fmtDate(iso);
+  }
+  function hostOf(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ''); } catch (err) { return url; }
+  }
+  function safeUrl(url) { return /^https?:\/\//i.test(String(url || '')) ? url : null; }
+  function displayName(p) { return p.name || p.partNumber || p.id; }
+  function plural(n, one, many) { return fmt(n) + ' ' + (Number(n) === 1 ? one : many); }
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  const byText = (a, b) => collator.compare(a || '', b || '');
+
+  const store = {
+    get(key) { try { return window.localStorage.getItem('parts-inventory.' + key); } catch (err) { return null; } },
+    set(key, value) {
+      try {
+        if (value === null || value === undefined || value === '') window.localStorage.removeItem('parts-inventory.' + key);
+        else window.localStorage.setItem('parts-inventory.' + key, value);
+      } catch (err) { /* storage can be unavailable in private windows */ }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // State
+  // -------------------------------------------------------------------------
+
+  const state = {
+    data: null,
+    parts: [],
+    view: 'inventory',
+    filter: 'all',
+    search: '',
+    category: '',
+    sort: store.get('sort') || 'name',
+    showCount: 150,
+    selectedId: null,
+    adjustMode: 'remove',
+    activity: null,
+    activityLimit: 100,
+    activityLoadedAt: 0,
+    partActivity: {},
+    partActivityLoading: {},
+    touched: {},
+    code: store.get('code') || '',
+    actor: store.get('actor') || '',
+    loadedAt: 0,
+    loading: false,
+    pending: {},
+    inflight: {},
+    timers: {},
+    editing: null,
+    dismissed: {},
+  };
+
+  // -------------------------------------------------------------------------
+  // Talking to the server (google.script.run)
+  // -------------------------------------------------------------------------
+
+  function call(fn, ...args) {
+    return new Promise((resolve, reject) => {
+      if (!window.google || !google.script || !google.script.run) {
+        reject(new Error('This page only works as a Google Apps Script web app.'));
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)[fn]({ code: state.code, actor: state.actor }, ...args);
+    });
+  }
+
+  function errorText(err) {
+    const raw = (err && err.message) || String(err || '');
+    if (/NetworkError|Failed to fetch|HTTP 0/i.test(raw)) return 'Couldn\'t reach Google. Check the connection and try again.';
+    return raw.replace(/^(Exception|Error):\s*/i, '').replace(/^.*?ACCESS_(DENIED|LOCKED):\s*/, '') || 'Something went wrong.';
+  }
+  function isAccessError(err) { return /ACCESS_(DENIED|LOCKED)/.test((err && err.message) || String(err)); }
+
+  function api(fn, ...args) {
+    return call(fn, ...args).catch((err) => {
+      if (isAccessError(err)) showLock(errorText(err));
+      throw err;
+    });
+  }
+
+  function load(options) {
+    const opts = options || {};
+    if (state.loading) return Promise.resolve();
+    state.loading = true;
+    const btn = $('#refresh-btn');
+    btn.classList.add('spin');
+    const requestedAt = Date.now();
+    return api('apiGetData')
+      .then((data) => {
+        // A change saved while this was loading is newer than what came back.
+        data.parts = data.parts.map((p) => {
+          const mine = state.touched[p.id] > requestedAt ? partById(p.id) : null;
+          return mine || p;
+        });
+        applyData(data);
+        if (opts.fromLock) store.set('code', state.code);
+      })
+      .catch((err) => {
+        if (isAccessError(err)) return;
+        if (!state.data) showFatal(errorText(err));
+        else toast(errorText(err), 'error');
+      })
+      .then(() => {
+        state.loading = false;
+        btn.classList.remove('spin');
+      });
+  }
+
+  function applyData(data) {
+    state.data = data;
+    state.parts = data.parts;
+    state.loadedAt = Date.now();
+    state.activity = null;
+    state.partActivity = {};
+    $('#screen').hidden = true;
+    $('#app').hidden = false;
+    $('#app-name').textContent = data.settings.appName;
+    document.title = data.settings.appName;
+    renderAll();
+  }
+
+  // -------------------------------------------------------------------------
+  // Stock status (mirrors the server) and the numbers shown on screen
+  // -------------------------------------------------------------------------
+
+  function partById(id) { return state.parts.find((p) => p.id === id) || null; }
+  function unsaved(id) { return (state.pending[id] || 0) + (state.inflight[id] || 0); }
+  function qtyOf(p) {
+    const d = unsaved(p.id);
+    if (p.quantity === null && !d) return null;
+    return round((p.quantity || 0) + d);
+  }
+  function statusOf(p) {
+    const q = qtyOf(p);
+    if (q !== null && q <= 0) return 'out';
+    if (p.minQty !== null && q !== null && q <= p.minQty) return 'low';
+    return 'ok';
+  }
+
+  function counts() {
+    const c = { all: state.parts.length, low: 0, out: 0, ordered: 0 };
+    state.parts.forEach((p) => {
+      const s = statusOf(p);
+      if (s !== 'ok') c.low++;
+      if (s === 'out') c.out++;
+      if (p.ordered) c.ordered++;
+    });
+    return c;
+  }
+
+  function visibleParts() {
+    const terms = state.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const list = state.parts.filter((p) => {
+      const s = statusOf(p);
+      if (state.filter === 'low' && s === 'ok') return false;
+      if (state.filter === 'out' && s !== 'out') return false;
+      if (state.filter === 'ordered' && !p.ordered) return false;
+      if (state.category && (p.category || '') !== state.category) return false;
+      if (!terms.length) return true;
+      const hay = [p.name, p.partNumber, p.id, p.category, p.location, p.supplier, p.notes].join(' ').toLowerCase();
+      return terms.every((t) => hay.indexOf(t) !== -1);
+    });
+    const rank = { out: 0, low: 1, ok: 2 };
+    const name = (p) => displayName(p);
+    list.sort((a, b) => {
+      if (state.sort === 'status') return rank[statusOf(a)] - rank[statusOf(b)] || byText(name(a), name(b));
+      if (state.sort === 'qty') {
+        const qa = qtyOf(a); const qb = qtyOf(b);
+        return (qa === null ? Infinity : qa) - (qb === null ? Infinity : qb) || byText(name(a), name(b));
+      }
+      if (state.sort === 'location') return byText(a.location || '￿', b.location || '￿') || byText(name(a), name(b));
+      if (state.sort === 'updated') return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')) || byText(name(a), name(b));
+      return byText(name(a), name(b));
+    });
+    return list;
+  }
+
+  function uniqueValues(key) {
+    const seen = {};
+    state.parts.forEach((p) => { if (p[key]) seen[p[key]] = true; });
+    return Object.keys(seen).sort(byText);
+  }
+
+  // -------------------------------------------------------------------------
+  // Rendering
+  // -------------------------------------------------------------------------
+
+  function renderAll() {
+    renderBanners();
+    renderStats();
+    renderCategoryFilter();
+    renderList();
+    if (state.selectedId) renderDrawer();
+    if (state.view === 'settings') renderSettings();
+    if (state.view === 'activity') showActivity();
+  }
+
+  function renderBanners() {
+    const el = clear($('#banners'));
+    const d = state.data;
+    const owner = d.user.isOwner;
+    const banner = (kind, iconName, key, body, actions) => h('div', { class: 'banner ' + kind, role: kind === 'error' ? 'alert' : null },
+      icon(iconName, 20),
+      h('div', { class: 'grow' }, body, actions && actions.length ? h('div', { class: 'banner-actions' }, actions) : null),
+      key ? h('button', { class: 'close', type: 'button', 'aria-label': 'Dismiss', onclick: () => { state.dismissed[key] = true; renderBanners(); } }, icon('x', 16)) : null);
+
+    if (!d.settings.recipients.length) {
+      el.appendChild(banner('warn', 'mail', null,
+        [h('b', {}, 'Nobody gets low-stock emails yet. '), owner ? 'Add an email address in Settings.' : 'Ask ' + (d.info.sender || 'the app owner') + ' to add one in Settings.'],
+        owner ? [h('button', { class: 'btn small', type: 'button', onclick: () => { setView('settings'); focusLater('#s-recipients'); } }, 'Add email')] : null));
+    }
+    if (d.info.lastAlertError && !state.dismissed.alertError) {
+      el.appendChild(banner('error', 'alert', 'alertError',
+        [h('b', {}, 'The last low-stock email couldn\'t be sent. '), d.info.lastAlertError.message, ' (', timeAgo(d.info.lastAlertError.at), '). It will be retried every hour.']));
+    }
+    if (owner && !d.info.alertsInstalled && !state.dismissed.triggers) {
+      el.appendChild(banner('warn', 'clock', 'triggers',
+        [h('b', {}, 'Automatic checks are off. '), 'Emails still go out for changes made here, but not for edits made straight in the spreadsheet. To fix that, open the spreadsheet and choose Inventory > Set up / repair.']));
+    }
+    if (!d.user.email && !state.actor && !state.dismissed.name && BOOT.mode !== 'sidebar') {
+      el.appendChild(banner('info', 'user', 'name',
+        'Add your name so your changes show up under it in the activity log.',
+        [h('button', { class: 'btn small', type: 'button', onclick: () => askName() }, 'Add my name')]));
+    }
+  }
+
+  function renderStats() {
+    const c = counts();
+    const el = clear($('#stats'));
+    [
+      { key: 'all', label: 'Parts', icon: 'box', n: c.all },
+      { key: 'low', label: 'Low stock', icon: 'alert', n: c.low },
+      { key: 'out', label: 'Out of stock', icon: 'x', n: c.out },
+      { key: 'ordered', label: 'On order', icon: 'truck', n: c.ordered },
+    ].forEach((s) => {
+      el.appendChild(h('button', {
+        class: 'stat ' + s.key + (s.n === 0 && s.key !== 'all' ? ' zero' : ''),
+        type: 'button',
+        'aria-pressed': String(state.filter === s.key),
+        onclick: () => setFilter(state.filter === s.key && s.key !== 'all' ? 'all' : s.key),
+      }, h('span', { class: 'stat-num' }, fmt(s.n)), h('span', { class: 'stat-label' }, icon(s.icon, 15), s.label)));
+    });
+  }
+
+  function renderCategoryFilter() {
+    const select = $('#category-filter');
+    const cats = uniqueValues('category');
+    select.hidden = !state.data.fields.category || !cats.length;
+    if (state.category && cats.indexOf(state.category) === -1) state.category = '';
+    clear(select).appendChild(h('option', { value: '' }, 'All categories'));
+    cats.forEach((c) => select.appendChild(h('option', { value: c, selected: c === state.category }, c)));
+    $('#sort').value = state.sort;
+  }
+
+  function renderList() {
+    const el = clear($('#list'));
+    const parts = visibleParts();
+    if (!state.parts.length) {
+      el.appendChild(h('div', { class: 'empty' },
+        h('div', { class: 'empty-icon' }, icon('box', 26)),
+        h('h3', {}, 'No parts yet'),
+        h('p', {}, 'Add your first part, with the link to reorder it and the quantity that should trigger a low-stock email. You can also type parts straight into the Inventory tab of the spreadsheet.'),
+        h('button', { class: 'btn primary', type: 'button', onclick: () => openPartForm(null) }, icon('plus'), 'Add a part')));
+      return;
+    }
+    if (!parts.length) {
+      el.appendChild(h('div', { class: 'empty' },
+        h('div', { class: 'empty-icon' }, icon('search', 24)),
+        h('h3', {}, 'No parts match'),
+        h('p', {}, state.filter === 'low' ? 'Nothing is low on stock right now.' : 'Try a different search or filter.'),
+        h('button', { class: 'btn', type: 'button', onclick: resetFilters }, 'Show all parts')));
+      return;
+    }
+    el.appendChild(h('div', { class: 'list-head', 'aria-hidden': 'true' },
+      h('span', {}, 'Part'), h('span', {}, 'Location'), h('span', {}, 'Alert at'), h('span', { class: 'right' }, 'On hand'), h('span', {})));
+    parts.slice(0, state.showCount).forEach((p) => el.appendChild(partRow(p)));
+    if (parts.length > state.showCount) {
+      el.appendChild(h('div', { class: 'more' },
+        h('button', { class: 'btn', type: 'button', onclick: () => { state.showCount += 150; renderList(); } },
+          'Show more (' + (parts.length - state.showCount) + ' more)')));
+    }
+  }
+
+  function badges(p) {
+    const s = statusOf(p);
+    return [
+      s === 'low' ? h('span', { class: 'badge low' }, 'Low') : null,
+      s === 'out' ? h('span', { class: 'badge out' }, 'Out') : null,
+      p.ordered ? h('span', { class: 'badge ordered' }, icon('truck', 13), 'On order') : null,
+    ];
+  }
+
+  function partRow(p) {
+    const s = statusOf(p);
+    const q = qtyOf(p);
+    const busy = unsaved(p.id) !== 0 || p.id in state.inflight;
+    const meta = [p.id, p.partNumber ? '#' + p.partNumber : '', p.category].filter(Boolean).join(' · ');
+    const link = safeUrl(p.links[0]);
+    return h('div', { class: 'row status-' + s, 'data-id': p.id },
+      h('button', { class: 'row-main', type: 'button', onclick: () => openPart(p.id) },
+        h('span', { class: 'row-title' }, h('span', { class: 'name' }, displayName(p)), badges(p)),
+        h('span', { class: 'row-meta' }, meta, p.location ? h('span', { class: 'meta-loc' }, ' · ', p.location) : null)),
+      h('div', { class: 'row-loc' }, p.location || h('span', { class: 'muted' }, '—')),
+      h('div', { class: 'row-info' }, p.minQty !== null ? [h('span', { class: 'info-label' }, 'Alert at '), fmt(p.minQty)] : 'No alert'),
+      h('div', { class: 'row-stock' },
+        h('div', { class: 'stepper' },
+          h('button', {
+            class: 'step', type: 'button', 'aria-label': 'Take one ' + displayName(p) + ' out',
+            disabled: q === null || q < 1, onclick: () => quickAdjust(p.id, -1),
+          }, icon('minus')),
+          h('span', { class: 'qty' + (busy ? ' saving' : ''), 'aria-label': fmt(q) + ' on hand' },
+            h('strong', {}, fmt(q)), p.unit ? h('small', {}, p.unit) : null),
+          h('button', {
+            class: 'step', type: 'button', 'aria-label': 'Put one ' + displayName(p) + ' back', onclick: () => quickAdjust(p.id, 1),
+          }, icon('plus')))),
+      h('div', { class: 'row-link' }, link
+        ? h('a', { class: 'icon-btn', href: link, target: '_blank', rel: 'noopener noreferrer', title: 'Order from ' + hostOf(link), 'aria-label': 'Order ' + displayName(p) + ' from ' + hostOf(link) }, icon('cart'))
+        : h('span', { class: 'placeholder' })));
+  }
+
+  function updateRow(id) {
+    const old = $('#list .row[data-id="' + CSS.escape(id) + '"]');
+    const p = partById(id);
+    if (old && p) old.replaceWith(partRow(p));
+    renderStats();
+    if (state.selectedId === id) renderDrawer();
+  }
+
+  // -------------------------------------------------------------------------
+  // Quick +/- buttons: taps are batched and sent once you stop tapping
+  // -------------------------------------------------------------------------
+
+  function quickAdjust(id, delta) {
+    const p = partById(id);
+    if (!p) return;
+    if ((qtyOf(p) || 0) + delta < 0) return;
+    state.pending[id] = round((state.pending[id] || 0) + delta);
+    updateRow(id);
+    clearTimeout(state.timers[id]);
+    state.timers[id] = setTimeout(() => flushAdjust(id), 700);
+  }
+
+  function flushAdjust(id) {
+    clearTimeout(state.timers[id]);
+    if (id in state.inflight) {
+      state.timers[id] = setTimeout(() => flushAdjust(id), 250);
+      return;
+    }
+    const delta = state.pending[id] || 0;
+    delete state.pending[id];
+    if (!delta) { updateRow(id); return; }
+    state.inflight[id] = delta;
+    api('apiAdjustStock', { id: id, mode: delta > 0 ? 'add' : 'remove', amount: Math.abs(delta) })
+      .then((res) => {
+        delete state.inflight[id];
+        replacePart(res.part);
+        announceAlert(res.alert);
+      })
+      .catch((err) => {
+        delete state.inflight[id];
+        updateRow(id);
+        if (!isAccessError(err)) toast(errorText(err), 'error');
+      });
+  }
+
+  function flushAll() { Object.keys(state.pending).forEach(flushAdjust); }
+
+  function replacePart(part) {
+    state.touched[part.id] = Date.now();
+    const i = state.parts.findIndex((p) => p.id === part.id);
+    if (i === -1) state.parts.push(part);
+    else state.parts[i] = part;
+    delete state.partActivity[part.id];
+    state.activity = null;
+    updateRow(part.id);
+  }
+
+  function announceAlert(alert) {
+    if (!alert) return;
+    if (alert.sent) toast('Low-stock email sent to ' + alert.recipients.join(', ') + '.', 'mail');
+    else if (alert.error) toast('Couldn\'t send the low-stock email: ' + alert.error, 'error');
+    else if (alert.skipped) toast('This part is now low. No email was sent: ' + alert.skipped, 'alert');
+  }
+
+  // -------------------------------------------------------------------------
+  // Part details drawer
+  // -------------------------------------------------------------------------
+
+  let drawerReturnFocus = null;
+
+  function openPart(id) {
+    const p = partById(id);
+    if (!p) { toast('That part wasn\'t found. It may have been deleted.', 'error'); return; }
+    if (state.selectedId !== id) state.adjustMode = statusOf(p) === 'out' ? 'add' : 'remove';
+    drawerReturnFocus = document.activeElement;
+    state.selectedId = id;
+    $('#drawer').hidden = false;
+    document.body.style.overflow = 'hidden';
+    renderDrawer();
+    const close = $('#drawer-close');
+    if (close) close.focus();
+  }
+
+  function closeDrawer() {
+    if (!state.selectedId) return;
+    state.selectedId = null;
+    $('#drawer').hidden = true;
+    document.body.style.overflow = '';
+    if (drawerReturnFocus && document.contains(drawerReturnFocus)) drawerReturnFocus.focus();
+  }
+
+  function renderDrawer() {
+    const panel = clear($('#drawer-panel'));
+    const p = partById(state.selectedId);
+    if (!p) { closeDrawer(); return; }
+    const s = statusOf(p);
+    const q = qtyOf(p);
+    const fields = state.data.fields;
+
+    panel.appendChild(h('div', { class: 'drawer-head' },
+      h('div', { class: 'grow' },
+        h('div', { class: 'eyebrow' }, [p.id, p.category].filter(Boolean).join(' · ')),
+        h('h2', { id: 'drawer-title' }, displayName(p)),
+        h('div', { class: 'row-title' },
+          s === 'ok' ? h('span', { class: 'badge ok' }, icon('check', 13), 'In stock') : null, badges(p),
+          p.partNumber ? h('span', { class: 'muted' }, 'Part # ' + p.partNumber) : null)),
+      h('button', { class: 'icon-btn', id: 'drawer-close', type: 'button', 'aria-label': 'Close', onclick: closeDrawer }, icon('x'))));
+
+    const body = h('div', { class: 'drawer-body' });
+    panel.appendChild(body);
+
+    // Stock and adjusting it
+    const amount = h('input', {
+      id: 'adjust-amount', type: 'number', inputmode: 'decimal', min: '0', step: 'any',
+      value: state.adjustMode === 'set' ? (q === null ? '' : String(q)) : '1', 'aria-label': 'Amount',
+    });
+    const note = h('input', { id: 'adjust-note', type: 'text', maxlength: '300', placeholder: 'Note (optional), e.g. job or reason', 'aria-label': 'Note' });
+    const preview = h('div', { class: 'adjust-preview', 'aria-live': 'polite' });
+    const apply = h('button', { class: 'btn primary block', type: 'submit' }, 'Apply');
+    const updatePreview = () => {
+      const n = Number(amount.value);
+      const cur = q || 0;
+      if (amount.value === '' || !(n >= 0)) { preview.textContent = ''; return; }
+      const next = state.adjustMode === 'add' ? cur + n : state.adjustMode === 'remove' ? cur - n : n;
+      preview.textContent = next < 0 ? 'Only ' + fmt(cur) + ' on hand.' : 'New quantity: ' + fmt(next) + (p.unit ? ' ' + p.unit : '') +
+        (p.minQty !== null && next <= p.minQty && !(p.minQty !== null && cur <= p.minQty) ? ' (low: an email will go out)' : '');
+    };
+    amount.addEventListener('input', updatePreview);
+    const modeButton = (mode, label) => h('button', {
+      type: 'button', 'aria-pressed': String(state.adjustMode === mode),
+      onclick: () => { state.adjustMode = mode; renderDrawer(); focusLater('#adjust-amount', true); },
+    }, label);
+    const form = h('form', {
+      class: 'form-grid', onsubmit: (e) => { e.preventDefault(); submitAdjust(p.id, amount.value, note.value, apply); },
+    },
+    h('div', { class: 'segmented', role: 'group', 'aria-label': 'Change type' },
+      modeButton('remove', 'Use'), modeButton('add', 'Restock'), modeButton('set', 'Set count')),
+    h('div', { class: 'adjust-row' }, amount, note), preview, apply);
+    updatePreview();
+
+    body.appendChild(h('div', { class: 'stock-card status-' + s },
+      h('div', { class: 'stock-top' },
+        h('div', {}, h('div', { class: 'eyebrow' }, 'On hand'), h('div', { class: 'stock-big' }, fmt(q), p.unit ? h('small', {}, p.unit) : null)),
+        h('div', { class: 'stock-levels' },
+          p.minQty !== null ? h('div', {}, 'Low-stock alert at ', h('b', {}, fmt(p.minQty))) : h('div', {}, 'No low-stock alert set'),
+          p.reorderQty !== null ? h('div', {}, 'Reorder ', h('b', {}, fmt(p.reorderQty))) : null)),
+      form));
+
+    // Ordering
+    const links = p.links.map(safeUrl).filter(Boolean);
+    const orderBox = h('div', { class: 'order-links' });
+    links.forEach((url, i) => orderBox.appendChild(h('a', {
+      class: 'btn' + (i === 0 ? ' primary' : ''), href: url, target: '_blank', rel: 'noopener noreferrer',
+    }, h('span', {}, 'Order from ' + hostOf(url)), icon('external', 16))));
+    if (!links.length) {
+      orderBox.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => openPartForm(p.id, 'f-link') }, icon('link', 16), 'Add an order link'));
+    }
+    if (p.ordered) {
+      orderBox.appendChild(h('div', { class: 'ordered-note' }, icon('truck'),
+        h('span', { class: 'grow' }, 'On order' + (p.orderedAt ? ' since ' + fmtDate(p.orderedAt) : '')),
+        h('button', { class: 'btn small', type: 'button', onclick: (e) => setOrdered(p.id, false, e.currentTarget) }, 'Clear')));
+    } else if (s !== 'ok') {
+      orderBox.appendChild(h('button', { class: 'btn', type: 'button', onclick: (e) => setOrdered(p.id, true, e.currentTarget) },
+        icon('check', 16), 'Mark as ordered'));
+    }
+    body.appendChild(h('section', {}, h('h3', { class: 'section-title' }, 'Reorder'), orderBox));
+
+    // Details
+    const dl = h('dl', { class: 'details' });
+    const row = (label, value) => { if (value !== null && value !== undefined && value !== '') add(dl, [h('dt', {}, label), h('dd', {}, value)]); };
+    if (fields.location) row('Location', p.location);
+    if (fields.supplier) row('Supplier', p.supplier);
+    if (fields.unitCost && p.unitCost !== null) row('Unit cost', fmtMoney(p.unitCost));
+    if (fields.notes) row('Notes', p.notes);
+    row('Last change', p.updatedAt ? fmtDate(p.updatedAt, true) + (p.updatedBy ? ' by ' + p.updatedBy : '') : '');
+    if (p.alerted) row('Alert emailed', p.alertSentAt ? fmtDate(p.alertSentAt, true) : 'Yes');
+    body.appendChild(h('section', {}, h('h3', { class: 'section-title' }, 'Details'), dl));
+
+    body.appendChild(h('div', { class: 'drawer-actions' },
+      h('button', { class: 'btn', type: 'button', onclick: () => openPartForm(p.id) }, icon('edit', 16), 'Edit'),
+      h('button', { class: 'btn', type: 'button', onclick: () => copyPartLink(p) }, icon('copy', 16), 'Copy link'),
+      h('button', { class: 'btn danger', type: 'button', onclick: () => deletePart(p) }, icon('trash', 16), 'Delete')));
+
+    // Recent activity for this part
+    const history = h('div', { id: 'part-history' });
+    body.appendChild(h('section', {}, h('h3', { class: 'section-title' }, 'Recent activity'), history));
+    renderPartActivity(p.id);
+  }
+
+  function submitAdjust(id, amountText, note, button) {
+    const amount = Number(amountText);
+    if (amountText === '' || !(amount >= 0)) { toast('Enter an amount.', 'error'); return; }
+    if (state.adjustMode !== 'set' && amount === 0) { toast('Enter an amount greater than zero.', 'error'); return; }
+    const mode = state.adjustMode;
+    const p = partById(id);
+    const before = qtyOf(p);
+    button.disabled = true;
+    api('apiAdjustStock', { id: id, mode: mode, amount: amount, note: note })
+      .then((res) => {
+        replacePart(res.part);
+        const verb = mode === 'add' ? 'Restocked ' + fmt(amount) : mode === 'remove' ? 'Used ' + fmt(amount) : 'Count set to ' + fmt(amount);
+        toast(verb + ' · ' + fmt(res.part.quantity) + ' on hand' + (mode === 'set' && before !== null ? ' (was ' + fmt(before) + ')' : ''), 'check');
+        announceAlert(res.alert);
+      })
+      .catch((err) => { if (!isAccessError(err)) toast(errorText(err), 'error'); })
+      .then(() => { button.disabled = false; });
+  }
+
+  function setOrdered(id, ordered, button) {
+    if (button) button.disabled = true;
+    api('apiSetOrdered', id, ordered)
+      .then((res) => {
+        replacePart(res.part);
+        toast(ordered ? 'Marked as ordered. Reminders skip it until it\'s restocked.' : 'Order mark cleared.', 'truck');
+      })
+      .catch((err) => { if (!isAccessError(err)) toast(errorText(err), 'error'); if (button) button.disabled = false; });
+  }
+
+  function loadPartActivity(id) {
+    if (state.partActivityLoading[id]) return;
+    state.partActivityLoading[id] = true;
+    api('apiGetActivity', { partId: id, limit: 12 })
+      .then((res) => { state.partActivity[id] = res.entries; }, () => { state.partActivity[id] = []; })
+      .then(() => {
+        delete state.partActivityLoading[id];
+        if (state.selectedId === id) renderPartActivity(id);
+      });
+  }
+
+  function renderPartActivity(id) {
+    const el = $('#part-history');
+    if (!el) return;
+    clear(el);
+    const entries = state.partActivity[id];
+    if (!entries) {
+      el.appendChild(h('div', { class: 'card-list' }, h('div', { class: 'skeleton' }, h('div', { class: 'bar', style: 'width:60%' }), h('div', { class: 'bar', style: 'width:35%' }))));
+      loadPartActivity(id);
+      return;
+    }
+    if (!entries.length) { el.appendChild(h('p', { class: 'muted' }, 'Nothing yet.')); return; }
+    el.appendChild(h('ul', { class: 'timeline card-list' }, entries.map((e) => activityItem(e, false))));
+  }
+
+  function copyPartLink(p) {
+    const base = state.data.settings.appUrl;
+    if (!base) { toast('The link is available once the app has been opened from its web app URL.', 'info'); return; }
+    const url = base + (base.indexOf('?') === -1 ? '?' : '&') + 'part=' + encodeURIComponent(p.id);
+    copyText(url).then((ok) => toast(ok ? 'Link copied. It opens this part directly (handy for QR labels on bins).' : url, ok ? 'check' : 'link'));
+  }
+
+  function copyText(text) {
+    const fallback = () => {
+      const ta = h('textarea', { style: 'position:fixed;opacity:0;top:0;left:0' });
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+      ta.remove();
+      return ok;
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(() => true, () => fallback());
+    }
+    return Promise.resolve(fallback());
+  }
+
+  function deletePart(p) {
+    confirmDialog({
+      title: 'Delete ' + displayName(p) + '?',
+      message: 'This removes the part and its row from the spreadsheet. Its history stays in the Activity Log tab.',
+      ok: 'Delete part',
+      danger: true,
+    }).then((yes) => {
+      if (!yes) return;
+      api('apiDeletePart', p.id)
+        .then(() => {
+          state.parts = state.parts.filter((x) => x.id !== p.id);
+          state.activity = null;
+          closeDrawer();
+          renderAll();
+          toast('Deleted ' + displayName(p) + '.', 'trash');
+        })
+        .catch((err) => { if (!isAccessError(err)) toast(errorText(err), 'error'); });
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Add / edit form
+  // -------------------------------------------------------------------------
+
+  const FORM_FIELDS = ['name', 'partNumber', 'category', 'location', 'supplier', 'quantity', 'unit', 'minQty', 'reorderQty', 'unitCost', 'link', 'notes'];
+  const NUMBER_FIELDS = ['quantity', 'minQty', 'reorderQty', 'unitCost'];
+
+  function formValue(p, key) {
+    if (!p) return key === 'quantity' ? '' : '';
+    if (key === 'link') return p.links.length ? p.links.join('\n') : p.link;
+    const v = p[key];
+    return v === null || v === undefined ? '' : String(v);
+  }
+
+  function openPartForm(id, focusId) {
+    const p = id ? partById(id) : null;
+    state.editing = p ? p.id : null;
+    const dialog = $('#part-dialog');
+    const fields = state.data.fields;
+    $('#part-dialog-title').textContent = p ? 'Edit ' + displayName(p) : 'Add part';
+    $('#part-save').textContent = p ? 'Save changes' : 'Add part';
+    $('#part-form-error').hidden = true;
+    $('#dup-hint').hidden = true;
+    $$('[data-field]', dialog).forEach((el) => { el.hidden = !fields[el.getAttribute('data-field')]; });
+    FORM_FIELDS.forEach((key) => {
+      const input = $('#f-' + key);
+      input.value = formValue(p, key);
+      input.removeAttribute('aria-invalid');
+      input.dataset.original = input.value;
+    });
+    if (!p) $('#f-quantity').value = '0';
+    ['category', 'location', 'supplier'].forEach((key) => fillDatalist('#dl-' + key, uniqueValues(key)));
+    fillDatalist('#dl-unit', ['ea', 'pcs', 'box', 'pack', 'bag', 'roll', 'ft', 'm', 'lb', 'kg', 'gal', 'L'].concat(uniqueValues('unit')));
+    if (!dialog.open) dialog.showModal();
+    focusLater('#' + (focusId || 'f-name'), true);
+  }
+
+  function fillDatalist(sel, values) {
+    const seen = {};
+    const el = clear($(sel));
+    values.forEach((v) => { if (!seen[v]) { seen[v] = true; el.appendChild(h('option', { value: v })); } });
+  }
+
+  function checkDuplicate() {
+    const value = $('#f-partNumber').value.trim().toLowerCase();
+    const hint = $('#dup-hint');
+    const other = value && state.parts.find((p) => p.id !== state.editing && (p.partNumber || '').toLowerCase() === value);
+    hint.hidden = !other;
+    if (other) hint.textContent = displayName(other) + ' (' + other.id + ') already has this part number.';
+  }
+
+  function submitPartForm(e) {
+    e.preventDefault();
+    const errorBox = $('#part-form-error');
+    errorBox.hidden = true;
+    const fields = state.data.fields;
+    const isNew = !state.editing;
+    const input = {};
+    let problem = null;
+    FORM_FIELDS.forEach((key) => {
+      const el = $('#f-' + key);
+      const container = el.closest('[data-field]');
+      if (container && container.hidden) return;
+      if (key === 'unit' && !fields.unit) return;
+      el.removeAttribute('aria-invalid');
+      const value = el.value.trim();
+      if (NUMBER_FIELDS.indexOf(key) !== -1 && value !== '' && !(Number(value) >= 0)) {
+        el.setAttribute('aria-invalid', 'true');
+        problem = problem || { el: el, message: 'Numbers must be 0 or more.' };
+      }
+      if (isNew || value !== el.dataset.original.trim()) input[key] = value;
+    });
+    if (!$('#f-name').value.trim()) problem = { el: $('#f-name'), message: 'Give the part a name.' };
+    if ($('#f-quantity').value.trim() === '') problem = problem || { el: $('#f-quantity'), message: 'Enter the quantity on hand (0 if there are none).' };
+    if (problem) {
+      problem.el.setAttribute('aria-invalid', 'true');
+      showFormError(problem.message);
+      problem.el.focus();
+      return;
+    }
+    if (!isNew && !Object.keys(input).length) { $('#part-dialog').close(); return; }
+    if (!isNew) input.id = state.editing;
+    const save = $('#part-save');
+    save.disabled = true;
+    save.textContent = 'Saving…';
+    api('apiSavePart', input)
+      .then((res) => {
+        $('#part-dialog').close();
+        replacePart(res.part);
+        if (isNew) {
+          renderAll();
+          const row = $('#list .row[data-id="' + CSS.escape(res.part.id) + '"]');
+          if (row) { row.classList.add('flash'); row.scrollIntoView({ block: 'nearest' }); }
+          toast('Added ' + displayName(res.part) + ' (' + res.part.id + ').', 'check');
+        } else {
+          renderAll();
+          toast('Saved.', 'check');
+        }
+        announceAlert(res.alert);
+      })
+      .catch((err) => { if (!isAccessError(err)) showFormError(errorText(err)); })
+      .then(() => { save.disabled = false; save.textContent = isNew ? 'Add part' : 'Save changes'; });
+  }
+
+  function showFormError(message) {
+    const box = $('#part-form-error');
+    clear(box).appendChild(icon('alert', 18));
+    box.appendChild(document.createTextNode(message));
+    box.hidden = false;
+    box.scrollIntoView({ block: 'nearest' });
+  }
+
+  // -------------------------------------------------------------------------
+  // Activity
+  // -------------------------------------------------------------------------
+
+  const ACTION_STYLE = {
+    'Used': ['used', 'minus'],
+    'Restocked': ['restocked', 'plus'],
+    'Added': ['added', 'box'],
+    'Count set': ['', 'edit'],
+    'Edited': ['', 'edit'],
+    'Deleted': ['deleted', 'trash'],
+    'Alert emailed': ['alert', 'mail'],
+    'Marked ordered': ['ordered', 'truck'],
+    'Order mark cleared': ['', 'truck'],
+  };
+
+  function activityItem(e, showPart) {
+    const style = ACTION_STYLE[e.action] || ['', 'clock'];
+    const change = typeof e.change === 'number' && e.action !== 'Added'
+      ? h('span', { class: 'chg ' + (e.change < 0 ? 'neg' : 'pos') }, (e.change > 0 ? '+' : '') + fmt(e.change)) : null;
+    const partLabel = showPart
+      ? (partById(e.partId)
+        ? h('button', { class: 'link-btn', type: 'button', onclick: () => openPart(e.partId) }, e.part)
+        : h('b', {}, e.part))
+      : null;
+    return h('li', { class: 'act ' + style[0] },
+      h('span', { class: 'act-icon' }, icon(style[1], 16)),
+      h('div', {},
+        h('div', { class: 'act-line' }, e.action, change ? [' ', change] : null, partLabel ? [' · ', partLabel] : null,
+          typeof e.qtyAfter === 'number' && e.action !== 'Alert emailed' ? h('span', { class: 'muted' }, ' → ' + fmt(e.qtyAfter)) : null),
+        h('div', { class: 'act-sub' }, [e.by, timeAgo(e.at)].filter(Boolean).join(' · '), e.note ? ' · ' + e.note : '')));
+  }
+
+  function showActivity() {
+    const fresh = state.activity && Date.now() - state.activityLoadedAt < 30000;
+    if (fresh) { renderActivity(); return; }
+    if (!state.activity) renderActivity();
+    loadActivity();
+  }
+
+  function loadActivity() {
+    const btn = $('#activity-refresh');
+    btn.disabled = true;
+    return api('apiGetActivity', { limit: state.activityLimit })
+      .then((res) => { state.activity = res.entries; state.activityLoadedAt = Date.now(); renderActivity(); })
+      .catch((err) => { if (!isAccessError(err)) toast(errorText(err), 'error'); })
+      .then(() => { btn.disabled = false; });
+  }
+
+  function renderActivity() {
+    const el = clear($('#activity'));
+    if (!state.activity) {
+      const list = h('div', { class: 'card-list' });
+      for (let i = 0; i < 5; i++) list.appendChild(h('div', { class: 'skeleton' }, h('div', { class: 'bar', style: 'width:' + (40 + i * 9) + '%' }), h('div', { class: 'bar', style: 'width:24%' })));
+      el.appendChild(list);
+      return;
+    }
+    if (!state.activity.length) {
+      el.appendChild(h('div', { class: 'card-list' }, h('div', { class: 'empty' },
+        h('div', { class: 'empty-icon' }, icon('history', 24)), h('h3', {}, 'No activity yet'),
+        h('p', {}, 'Every change made in the app shows up here, along with the low-stock emails that were sent.'))));
+      return;
+    }
+    el.appendChild(h('ul', { class: 'timeline card-list' }, state.activity.map((e) => activityItem(e, true))));
+    if (state.activity.length >= state.activityLimit && state.activityLimit < 500) {
+      el.appendChild(h('div', { class: 'more' }, h('button', {
+        class: 'btn', type: 'button',
+        onclick: () => { state.activityLimit = Math.min(state.activityLimit + 200, 500); loadActivity(); },
+      }, 'Show older')));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Settings
+  // -------------------------------------------------------------------------
+
+  const REMINDERS = [['Off', 'Off'], ['Daily', 'Every day'], ['Weekdays', 'Weekdays (Mon–Fri)'], ['Weekly', 'Weekly (Mondays)']];
+
+  function hourLabel(hour) {
+    const d = new Date(2000, 0, 1, hour);
+    return d.toLocaleTimeString(undefined, { hour: 'numeric' });
+  }
+
+  function renderSettings() {
+    const el = clear($('#settings'));
+    const d = state.data;
+    const s = d.settings;
+    const owner = d.user.isOwner;
+    const off = !owner;
+
+    const recipients = h('textarea', { id: 's-recipients', rows: '2', disabled: off, spellcheck: 'false', placeholder: 'buyer@yourcompany.com, you@gmail.com' });
+    recipients.value = s.recipients.join(', ');
+    const alerts = h('input', { id: 's-alerts', type: 'checkbox', disabled: off, checked: s.alertsEnabled });
+    const reminder = h('select', { id: 's-reminder', disabled: off }, REMINDERS.map((r) => h('option', { value: r[0], selected: r[0] === s.reminder }, r[1])));
+    const hour = h('select', { id: 's-hour', disabled: off, 'aria-label': 'Reminder time' });
+    for (let i = 0; i < 24; i++) hour.appendChild(h('option', { value: String(i), selected: i === s.reminderHour }, hourLabel(i)));
+    const syncHour = () => { hour.disabled = off || reminder.value === 'Off'; };
+    reminder.addEventListener('change', syncHour);
+    syncHour();
+    const appName = h('input', { id: 's-appname', maxlength: '60', disabled: off });
+    appName.value = s.appName;
+    const code = h('input', { id: 's-code', maxlength: '64', disabled: off, autocomplete: 'off', spellcheck: 'false', placeholder: owner ? 'No code (anyone with the link can open it)' : (s.accessCodeSet ? 'Set' : 'Not set') });
+    code.value = s.accessCode;
+    const appUrl = h('input', { id: 's-appurl', type: 'url', disabled: off, spellcheck: 'false', placeholder: 'Filled in when the web app is opened' });
+    appUrl.value = s.appUrl;
+
+    const saveBtn = h('button', { class: 'btn primary', type: 'submit', disabled: off }, 'Save settings');
+    const form = h('form', { class: 'card', onsubmit: (e) => {
+      e.preventDefault();
+      saveBtn.disabled = true;
+      api('apiSaveSettings', {
+        recipients: recipients.value, alertsEnabled: alerts.checked, reminder: reminder.value,
+        reminderHour: Number(hour.value), appName: appName.value, accessCode: code.value, appUrl: appUrl.value,
+      })
+        .then((res) => {
+          state.data.settings = res.settings;
+          $('#app-name').textContent = res.settings.appName;
+          document.title = res.settings.appName;
+          renderBanners();
+          renderSettings();
+          toast('Settings saved.', 'check');
+        })
+        .catch((err) => { if (!isAccessError(err)) toast(errorText(err), 'error'); saveBtn.disabled = false; });
+    } },
+    h('h2', {}, 'Low-stock emails'),
+    h('p', { class: 'sub' }, owner ? 'Who gets told when parts run low, and when.' : 'Only ' + (d.info.sender || 'the person who set up the app') + ' can change these.'),
+    h('div', { class: 'form-grid two' },
+      h('div', { class: 'field span-2' }, h('label', { for: 's-recipients' }, 'Send alerts to'), recipients,
+        h('span', { class: 'hint' }, 'Separate several addresses with commas. Any email address works, including Outlook.')),
+      h('label', { class: 'switch span-2', for: 's-alerts' }, alerts, h('span', { class: 'track' }),
+        h('span', { class: 'switch-text' }, h('b', {}, 'Email as soon as a part runs low'),
+          h('span', { class: 'hint' }, 'One email per part when it drops to or below its alert level. It can email again after the part is restocked.'))),
+      h('div', { class: 'field' }, h('label', { for: 's-reminder' }, 'Reminder of parts still low'), reminder),
+      h('div', { class: 'field' }, h('label', { for: 's-hour' }, 'Reminder time'), hour),
+      h('div', { class: 'field span-2' }, h('span', { class: 'hint' }, 'The reminder lists parts that are still low and not marked as ordered. Times use the spreadsheet\'s time zone (' + d.info.timeZone + ').'))),
+    h('h2', { style: 'margin-top:22px' }, 'App'),
+    h('p', { class: 'sub' }, 'How the app looks and who can open it.'),
+    h('div', { class: 'form-grid two' },
+      h('div', { class: 'field' }, h('label', { for: 's-appname' }, 'App name'), appName),
+      h('div', { class: 'field' }, h('label', { for: 's-code' }, 'Access code'), code,
+        h('span', { class: 'hint' }, 'Optional. People enter it once per device. Use one if anyone with the link can open the app.')),
+      h('div', { class: 'field span-2' }, h('label', { for: 's-appurl' }, 'Web app link'), appUrl,
+        h('span', { class: 'hint' }, 'Used for the "View in the app" links in emails.'))),
+    h('div', { class: 'card-actions' }, saveBtn));
+    el.appendChild(form);
+
+    // Emails card
+    const facts = h('ul', { class: 'facts' },
+      h('li', {}, icon('send', 16), h('span', {}, 'Emails are sent from ', h('b', {}, d.info.sender || 'the owner\'s Google account'), '.')),
+      d.info.emailQuota !== null ? h('li', {}, icon('mail', 16), h('span', {}, d.info.emailQuota + ' emails left today (Google\'s daily limit).')) : null,
+      h('li', {}, icon('clock', 16), h('span', {}, d.info.alertsInstalled
+        ? 'Automatic check every hour' + (d.info.lastCheck ? ', last one ' + timeAgo(d.info.lastCheck) : '') + '.'
+        : 'Automatic checks are off. In the spreadsheet, choose Inventory > Set up / repair.')),
+      d.info.lastAlertError ? h('li', {}, icon('alert', 16), h('span', {}, 'Last problem: ' + d.info.lastAlertError.message + ' (' + timeAgo(d.info.lastAlertError.at) + ')')) : null);
+    const testBtn = h('button', { class: 'btn', type: 'button', disabled: off || !s.recipients.length, onclick: () => sendEmail('apiSendTestEmail', testBtn) }, icon('send', 16), 'Send test email');
+    const remindBtn = h('button', { class: 'btn', type: 'button', disabled: off || !s.recipients.length, onclick: () => sendEmail('apiSendReminderNow', remindBtn) }, icon('mail', 16), 'Email the low-stock list now');
+    el.appendChild(h('section', { class: 'card' },
+      h('h2', {}, 'Emails'),
+      h('p', { class: 'sub' }, 'Check that alerts reach your inbox. If they don\'t, look in the spam folder and mark them as "not spam".'),
+      owner ? h('div', { class: 'card-actions', style: 'margin-top:0' }, testBtn, remindBtn) : null,
+      facts));
+
+    // This device
+    const nameInput = h('input', { id: 's-name', maxlength: '60', autocomplete: 'name', placeholder: d.user.email || 'e.g. Sam R.' });
+    nameInput.value = state.actor;
+    nameInput.addEventListener('change', () => { setActor(nameInput.value); toast('Saved on this device.', 'check'); });
+    el.appendChild(h('section', { class: 'card' },
+      h('h2', {}, 'You'),
+      h('p', { class: 'sub' }, d.user.email ? 'You\'re signed in as ' + d.user.email + '. Changes are logged under that address.' : 'Google doesn\'t tell the app who you are, so changes are logged under this name. It\'s saved on this device.'),
+      d.user.email ? null : h('div', { class: 'field' }, h('label', { for: 's-name' }, 'Your name'), nameInput),
+      state.code && !owner ? h('div', { class: 'card-actions' }, h('button', { class: 'btn', type: 'button', onclick: forgetCode }, icon('lock', 16), 'Forget the access code on this device')) : null));
+
+    el.appendChild(h('section', { class: 'card' },
+      h('h2', {}, 'Spreadsheet'),
+      h('p', { class: 'sub' }, 'Everything is stored in the Google Sheet "' + d.info.spreadsheetName + '": the Inventory, Settings and Activity Log tabs. Edits there show up here after a refresh.'),
+      h('div', { class: 'card-actions', style: 'margin-top:0' },
+        h('a', { class: 'btn', href: safeUrl(d.info.spreadsheetUrl) || '#', target: '_blank', rel: 'noopener noreferrer' }, icon('sheet', 16), 'Open the spreadsheet'),
+        h('span', { class: 'muted' }, 'Version ' + d.version))));
+  }
+
+  function sendEmail(fn, button) {
+    button.disabled = true;
+    api(fn)
+      .then((res) => {
+        if (fn === 'apiSendTestEmail') toast('Test email sent to ' + res.recipients.join(', ') + '.', 'mail');
+        else toast(res.sent ? 'Sent the list of ' + plural(res.count + res.onOrder, 'low part', 'low parts') + '.' : 'Nothing is low right now, so no email was sent.', 'mail');
+      })
+      .catch((err) => { if (!isAccessError(err)) toast(errorText(err), 'error'); })
+      .then(() => { button.disabled = false; });
+  }
+
+  function setActor(name) {
+    state.actor = String(name || '').trim().slice(0, 60);
+    store.set('actor', state.actor);
+    renderBanners();
+  }
+
+  function forgetCode() {
+    state.code = '';
+    store.set('code', '');
+    showLock();
+  }
+
+  // -------------------------------------------------------------------------
+  // Toasts and small dialogs
+  // -------------------------------------------------------------------------
+
+  function toast(message, kind) {
+    const box = $('#toasts');
+    const el = h('div', { class: 'toast' + (kind === 'error' ? ' error' : ''), role: kind === 'error' ? 'alert' : 'status' },
+      icon(kind === 'error' ? 'alert' : ICONS[kind] ? kind : 'info', 18),
+      h('div', { class: 'grow' }, message),
+      h('button', { type: 'button', 'aria-label': 'Dismiss', onclick: () => dismiss() }, icon('x', 16)));
+    const dismiss = () => { el.classList.add('leaving'); setTimeout(() => el.remove(), 200); };
+    box.appendChild(el);
+    while (box.children.length > 3) box.firstChild.remove();
+    setTimeout(dismiss, kind === 'error' ? 9000 : 4500);
+  }
+
+  function confirmDialog(opts) {
+    const dialog = $('#confirm-dialog');
+    $('#confirm-title').textContent = opts.title;
+    $('#confirm-message').textContent = opts.message;
+    const ok = $('#confirm-ok');
+    ok.textContent = opts.ok || 'OK';
+    ok.className = 'btn ' + (opts.danger ? 'danger-fill' : 'primary');
+    dialog.showModal();
+    return new Promise((resolve) => {
+      const done = (value) => {
+        ok.onclick = null;
+        $('#confirm-cancel').onclick = null;
+        dialog.onclose = null;
+        if (dialog.open) dialog.close();
+        resolve(value);
+      };
+      ok.onclick = () => done(true);
+      $('#confirm-cancel').onclick = () => done(false);
+      dialog.onclose = () => done(false);
+    });
+  }
+
+  function askName() {
+    const dialog = $('#name-dialog');
+    $('#name-input').value = state.actor;
+    dialog.showModal();
+    focusLater('#name-input', true);
+  }
+
+  function focusLater(sel, select) {
+    setTimeout(() => {
+      const el = $(sel);
+      if (!el) return;
+      el.focus();
+      if (select && el.select) el.select();
+    }, 30);
+  }
+
+  // -------------------------------------------------------------------------
+  // Views, filters and full-screen states
+  // -------------------------------------------------------------------------
+
+  function setView(view) {
+    state.view = view;
+    $$('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.getAttribute('data-view') === view)));
+    ['inventory', 'activity', 'settings'].forEach((v) => { $('#view-' + v).hidden = v !== view; });
+    $('#add-btn').hidden = view !== 'inventory';
+    if (view === 'settings') renderSettings();
+    if (view === 'activity') showActivity();
+    window.scrollTo(0, 0);
+  }
+
+  function setFilter(filter) {
+    state.filter = filter;
+    state.showCount = 150;
+    renderStats();
+    renderList();
+  }
+
+  function resetFilters() {
+    state.filter = 'all';
+    state.search = '';
+    state.category = '';
+    $('#search').value = '';
+    renderCategoryFilter();
+    renderStats();
+    renderList();
+  }
+
+  /** Shows the access code screen. message is the server's reason, shown only when a code was tried. */
+  function showLock(message) {
+    const screen = clear($('#screen'));
+    $('#app').hidden = true;
+    closeDrawer();
+    const input = h('input', { id: 'code-input', type: 'password', autocomplete: 'current-password', 'aria-label': 'Access code', placeholder: 'Access code', required: true });
+    const error = h('div', { class: 'error-text', role: 'alert' });
+    const btn = h('button', { class: 'btn primary block', type: 'submit' }, 'Open');
+    screen.appendChild(h('div', { class: 'screen-card' },
+      h('div', { class: 'logo' }, icon('lock', 24)),
+      h('h1', {}, (state.data && state.data.settings.appName) || BOOT.appName || 'Parts Inventory'),
+      h('p', {}, 'Enter the access code to open the inventory. You only need to do this once on this device.'),
+      h('form', { onsubmit: (e) => {
+        e.preventDefault();
+        state.code = input.value.trim();
+        if (!state.code) return;
+        btn.disabled = true;
+        error.textContent = '';
+        load({ fromLock: true }).then(() => { btn.disabled = false; });
+      } }, input, error, btn)));
+    screen.hidden = false;
+    if (message && state.code) {
+      // A saved or typed code was turned down: say why and forget it.
+      error.textContent = message;
+      state.code = '';
+      store.set('code', '');
+    }
+    setTimeout(() => input.focus(), 30);
+  }
+
+  function showFatal(message) {
+    const screen = clear($('#screen'));
+    $('#app').hidden = true;
+    screen.appendChild(h('div', { class: 'screen-card' },
+      h('div', { class: 'logo' }, icon('alert', 24)),
+      h('h1', {}, 'Couldn\'t open the inventory'),
+      h('p', {}, 'If this is a new setup, open the spreadsheet and choose Inventory > Set up / repair, then try again.'),
+      h('pre', {}, message),
+      h('button', { class: 'btn primary block', type: 'button', onclick: () => { screen.hidden = true; showLoading(); load(); } }, 'Try again')));
+    screen.hidden = false;
+  }
+
+  function showLoading() {
+    $('#app').hidden = false;
+    const list = clear($('#list'));
+    for (let i = 0; i < 6; i++) {
+      list.appendChild(h('div', { class: 'skeleton' }, h('div', { class: 'bar', style: 'width:' + (30 + ((i * 17) % 40)) + '%' }), h('div', { class: 'bar', style: 'width:18%' })));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Start up
+  // -------------------------------------------------------------------------
+
+  function wire() {
+    $$('[data-icon]').forEach((el) => el.insertBefore(icon(el.getAttribute('data-icon'), el.classList.contains('logo') ? 18 : 18), el.firstChild));
+    $$('.tab').forEach((t) => t.addEventListener('click', () => setView(t.getAttribute('data-view'))));
+    $('#refresh-btn').addEventListener('click', () => { flushAll(); load(); if (state.view === 'activity') loadActivity(); });
+    $('#add-btn').addEventListener('click', () => openPartForm(null));
+    $('#activity-refresh').addEventListener('click', loadActivity);
+    let searchTimer = null;
+    $('#search').addEventListener('input', (e) => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { state.search = e.target.value; state.showCount = 150; renderList(); }, 120);
+    });
+    $('#category-filter').addEventListener('change', (e) => { state.category = e.target.value; renderList(); });
+    $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; store.set('sort', state.sort); renderList(); });
+    $('[data-close-drawer]').addEventListener('click', closeDrawer);
+    $('#part-form').addEventListener('submit', submitPartForm);
+    $('#f-partNumber').addEventListener('input', checkDuplicate);
+    $$('[data-close-dialog]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
+    $('#name-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      setActor($('#name-input').value);
+      $('#name-dialog').close();
+      if (state.actor) toast('Thanks, ' + state.actor + '.', 'check');
+    });
+    $('#name-skip').addEventListener('click', () => { state.dismissed.name = true; $('#name-dialog').close(); renderBanners(); });
+
+    document.addEventListener('keydown', (e) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '');
+      if (e.key === 'Escape' && state.selectedId && !$('dialog[open]')) { closeDrawer(); return; }
+      if (e.key === '/' && !typing && state.view === 'inventory' && !$('dialog[open]') && !state.selectedId) {
+        e.preventDefault();
+        $('#search').focus();
+      }
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') { flushAll(); return; }
+      if (state.data && Date.now() - state.loadedAt > 60000 && !Object.keys(state.pending).length) load();
+    });
+    window.addEventListener('pagehide', flushAll);
+    setInterval(() => {
+      if (document.visibilityState === 'visible' && state.data && !$('dialog[open]') && !Object.keys(state.pending).length &&
+          !Object.keys(state.inflight).length && Date.now() - state.loadedAt > 5 * 60000) load();
+    }, 60000);
+  }
+
+  function start() {
+    wire();
+    if (BOOT.mode === 'sidebar') document.body.classList.add('is-sidebar');
+    if (BOOT.error) { showFatal(BOOT.error); return; }
+    if (BOOT.locked && !BOOT.data) {
+      if (state.code) { showLoading(); load({ fromLock: true }).then(openDeepLink); } else showLock();
+      return;
+    }
+    if (BOOT.data) { applyData(BOOT.data); openDeepLink(); return; }
+    showLoading();
+    load().then(openDeepLink);
+  }
+
+  function openDeepLink() {
+    if (!BOOT.part || !state.data) return;
+    const id = String(BOOT.part).toUpperCase();
+    BOOT.part = '';
+    if (partById(id)) openPart(id);
+    else toast('Part ' + id + ' wasn\'t found. It may have been deleted.', 'error');
+  }
+
+  start();
+})();
+</script>
+</body>
+</html>
