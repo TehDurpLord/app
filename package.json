@@ -8,7 +8,8 @@
     "test": "node --test test/*.test.js",
     "preview": "node dev/preview.js",
     "screenshots": "node dev/screenshots.js",
-    "push": "npx @google/clasp push"
+    "push": "npx @google/clasp push",
+    "demo": "node dev/build-demo.js"
   },
   "engines": {
     "node": ">=20"

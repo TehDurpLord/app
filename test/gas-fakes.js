@@ -436,10 +436,11 @@ function formatDate(date, timeZone, pattern) {
 }
 
 /**
- * Creates a fresh fake Google environment and loads src/Code.js into it.
- * opts: { owner, active, timeZone, ui, now, serviceUrl, spreadsheetName, quota }
+ * The fake Google services, without Code.js loaded. Works in Node and in a
+ * browser (see dev/build-demo.js).
+ * opts: { owner, active, timeZone, ui, now, serviceUrl, spreadsheetName, quota, readHtml }
  */
-function createApp(opts = {}) {
+function createEnvironment(opts = {}) {
   const env = {
     owner: opts.owner === undefined ? 'owner@example.com' : opts.owner,
     active: opts.active === undefined ? (opts.owner === undefined ? 'owner@example.com' : opts.owner) : opts.active,
@@ -513,7 +514,7 @@ function createApp(opts = {}) {
     setFaviconUrl(url) { this.favicon = url; return this; }
   }
 
-  const readHtml = (name) => fs.readFileSync(path.join(SRC_DIR, name + '.html'), 'utf8');
+  const readHtml = opts.readHtml || ((name) => fs.readFileSync(path.join(SRC_DIR, name + '.html'), 'utf8'));
 
   const HtmlService = {
     XFrameOptionsMode: { ALLOWALL: 'ALLOWALL', DEFAULT: 'DEFAULT' },
@@ -674,20 +675,20 @@ function createApp(opts = {}) {
     },
     Utilities: {
       formatDate,
-      getUuid: () => require('crypto').randomUUID(),
+      getUuid: () => globalThis.crypto.randomUUID(),
       sleep: () => {},
     },
   };
 
-  const injected = Object.assign({}, globals);
-  const context = vm.createContext(globals);
-  const code = fs.readFileSync(path.join(SRC_DIR, 'Code.js'), 'utf8');
-  vm.runInContext(code, context, { filename: 'Code.js' });
+  return { env, ss, globals, RealDate };
+}
 
-  const app = {
+/** Helpers around a loaded Code.js. lookup(name) returns one of its top-level functions. */
+function makeApp(environment, lookup, extras) {
+  const { env, ss, RealDate } = environment;
+  const app = Object.assign({
     env,
     ss,
-    context,
     /** The event object a trigger of this script would pass (with its real triggerUid). */
     triggerEvent(fn) {
       const t = env.triggers.find((x) => x.fn === fn);
@@ -696,12 +697,32 @@ function createApp(opts = {}) {
     },
     /** Calls a function from Code.js the way google.script.run would: arguments and result go through JSON. */
     run(name, ...args) {
-      if (typeof context[name] !== 'function') throw new Error('No function ' + name + ' in Code.js');
+      const fn = lookup(name);
+      if (typeof fn !== 'function') throw new Error('No function ' + name + ' in Code.js');
       if (/_$/.test(name)) throw new Error(name + ' is private and cannot be called by google.script.run');
-      const result = context[name](...JSON.parse(JSON.stringify(args)));
+      const result = fn(...JSON.parse(JSON.stringify(args)));
       assertJsonSafe(result, name);
       return result === undefined ? undefined : JSON.parse(JSON.stringify(result));
     },
+    sheet(name) { return ss.getSheetByName(name); },
+    setTime(iso) { env.now = new RealDate(iso).getTime(); },
+    as(active) { env.active = active; return app; },
+  }, extras);
+  return app;
+}
+
+/**
+ * Creates a fresh fake Google environment and loads src/Code.js into it.
+ * opts: see createEnvironment.
+ */
+function createApp(opts = {}) {
+  const environment = createEnvironment(opts);
+  const injected = Object.assign({}, environment.globals);
+  const context = vm.createContext(environment.globals);
+  const code = fs.readFileSync(path.join(SRC_DIR, 'Code.js'), 'utf8');
+  vm.runInContext(code, context, { filename: 'Code.js' });
+  return makeApp(environment, (name) => context[name], {
+    context,
     /** Runs any expression inside Code.js's scope (for constants and private helpers). */
     eval(expression) { return vm.runInContext(expression, context); },
     /** Like eval, but returns plain JSON data (objects made inside the sandbox fail strict equality). */
@@ -710,11 +731,7 @@ function createApp(opts = {}) {
     functionNames() {
       return Object.keys(context).filter((k) => typeof context[k] === 'function' && !(k in injected));
     },
-    sheet(name) { return ss.getSheetByName(name); },
-    setTime(iso) { env.now = new RealDate(iso).getTime(); },
-    as(active) { env.active = active; return app; },
-  };
-  return app;
+  });
 }
 
 /** google.script.run can't send Dates or functions back to the page; fail tests that try. */
@@ -728,4 +745,4 @@ function assertJsonSafe(value, where, trail = 'result') {
   }
 }
 
-module.exports = { createApp, FakeSpreadsheet, FakeSheet, formatDate, userEntered };
+module.exports = { createApp, createEnvironment, makeApp, FakeSpreadsheet, FakeSheet, formatDate, userEntered };

@@ -214,7 +214,7 @@ src/Code.js          Server side (Apps Script): sheet access, web app API, alert
 src/Index.html       The web app (HTML, CSS and plain JavaScript in one file; no external libraries)
 src/appsscript.json  Apps Script manifest
 test/                Tests: the real Code.js running on in-memory fakes of the Google services
-dev/                 Local preview server, example data, screenshot script
+dev/                 Local preview server, one-page demo builder, example data, screenshot script
 docs/                Screenshots for this README
 ```
 
@@ -222,6 +222,9 @@ docs/                Screenshots for this README
 npm test             # server tests; browser tests too when Playwright is installed
 npm run preview      # the full app at http://localhost:8080 with example data, no Google account needed
 ```
+
+`npm run demo` builds the same thing as one self-contained page (`dist/parts-inventory-demo.html`,
+or `--standalone` for a full HTML file) that runs in any browser with example data.
 
 `npm run preview` runs the real `Code.js` and `Index.html` on the fake Google services. Emails aren't
 sent; they're listed at `/emails`. Try `/?as=visitor` (a coworker's view), `/?code=bolt-7731` (turns

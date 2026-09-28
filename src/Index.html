@@ -34,7 +34,7 @@
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #0e1318;
       --surface: #161c23;
       --surface-2: #1b222a;
@@ -61,6 +61,33 @@
       color-scheme: dark;
     }
   }
+  /* An explicit theme choice (data-theme) wins over the system setting either way. */
+  :root[data-theme="dark"] {
+    --bg: #0e1318;
+    --surface: #161c23;
+    --surface-2: #1b222a;
+    --border: #28313b;
+    --border-strong: #36414d;
+    --text: #e7ecf1;
+    --text-2: #b8c2cc;
+    --muted: #8d99a6;
+    --accent: #2eb3a3;
+    --accent-hover: #43c3b3;
+    --accent-soft: #113833;
+    --on-accent: #04201c;
+    --ok: #5ad48a;
+    --ok-soft: #133021;
+    --low: #f3b04c;
+    --low-soft: #3a2a11;
+    --out: #f7837a;
+    --out-soft: #3c1a18;
+    --ordered: #86a6ff;
+    --ordered-soft: #1a2750;
+    --scrim: rgba(0, 0, 0, 0.6);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
 
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
@@ -77,7 +104,7 @@
 
   /* ---------- Top bar ---------- */
   .topbar {
-    position: sticky; top: 0; z-index: 20;
+    position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
     display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand actions" "tabs tabs";
     align-items: center; gap: 2px 12px; padding: 10px 16px 0;
     background: var(--surface); border-bottom: 1px solid var(--border);
@@ -405,7 +432,7 @@
   .screen-card pre { text-align: left; white-space: pre-wrap; background: var(--surface-2); border-radius: 8px; padding: 10px; font-size: 13px; color: var(--text-2); }
 
   /* ---------- Toasts ---------- */
-  .toasts { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 80; width: min(460px, calc(100% - 24px)); display: grid; gap: 8px; pointer-events: none; }
+  .toasts { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 80; width: min(460px, calc(100% - 24px)); display: grid; gap: 8px; pointer-events: none; }
   .toast {
     pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px 11px 14px;
     border-radius: 11px; background: #1d2731; color: #f3f6f9; box-shadow: var(--shadow-lg); font-size: 14px;
