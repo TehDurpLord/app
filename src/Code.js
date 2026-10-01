@@ -1,110 +1,141 @@
 /**
- * Parts Inventory
- * Track parts in a Google Sheet and get an email with the order links when
- * something runs low.
+ * Parts Inventory: low-stock emails for this Google Sheet.
  *
- * This is the server side of the app. It runs as a Google Apps Script bound to
- * the spreadsheet: it keeps the parts in the "Inventory" tab, serves the web
- * app (Index.html) and sends the low-stock emails. Setup steps are in
- * README.md, and in the spreadsheet under Inventory > Help.
+ * To turn the emails on (once):
+ *   1. In the spreadsheet, choose Extensions > Apps Script.
+ *   2. Delete everything in the editor, paste in this whole file, and click Save.
+ *   3. Click Run, and allow access when Google asks.
+ * Run it again any time to repair the tabs. More help is in README.md.
+ *
+ * From then on:
+ *   - When a part's Quantity drops to its Min Qty or below, the people listed
+ *     in the Settings tab get an email with the part's order link. Each part
+ *     is emailed once per shortage, and again only after it has been
+ *     restocked and runs low again.
+ *   - A reminder lists everything that is still low and not ticked as
+ *     Ordered (weekday mornings, unless Settings says otherwise).
+ *   - Ordered unticks itself once the part has been restocked.
  */
+
+// Asks Google for access to this spreadsheet only, rather than all of your files.
+/** @OnlyCurrentDoc */
+
+/**
+ * Sets up the Inventory, Reorder and Settings tabs, turns on the automatic
+ * emails and sends a test email. Safe to run again at any time. It's the
+ * first function in the file so that the editor's Run button runs it.
+ */
+function setup() {
+  const ss = getSpreadsheet_();
+  const report = withLock_(function () {
+    return setupSpreadsheet_(ss);
+  });
+  const ui = getUi_();
+  report.triggers = installTriggers_(ss, false);
+  if (!report.triggers.installed && ui) {
+    const owner = report.triggers.owner;
+    const answer = ui.alert('Email alerts',
+      'The emails were turned on by ' + owner + ' and are sent from that account. Turn them on under your ' +
+      'account instead? Only do this if ' + owner + ' no longer has access to this spreadsheet.',
+      ui.ButtonSet.YES_NO);
+    if (answer === ui.Button.YES) report.triggers = installTriggers_(ss, true);
+  }
+  const settings = getSettings_(ss);
+  try {
+    sendTestEmail_(ss, settings);
+    report.testEmailTo = settings.recipients.slice();
+    PropertiesService.getScriptProperties().deleteProperty(PROP.lastError);
+  } catch (err) {
+    report.emailError = errorMessage_(err);
+    PropertiesService.getScriptProperties().setProperty(PROP.lastError, report.emailError.slice(0, 300));
+  }
+  updateStatus_(ss);
+  const lines = setupSummary_(report);
+  if (ui) {
+    ss.setActiveSheet(ss.getSheetByName(SHEET_NAMES.inventory));
+    ui.alert('Parts Inventory', lines.join('\n\n'), ui.ButtonSet.OK);
+  } else {
+    lines.forEach(function (line) { console.log(line); });
+  }
+  return report;
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-const APP_VERSION = '1.0.0';
-
 const SHEET_NAMES = {
   inventory: 'Inventory',
+  reorder: 'Reorder',
   settings: 'Settings',
-  log: 'Activity Log',
 };
 
 /**
- * Columns of the Inventory tab. Each column is found by its header (case,
- * spaces and punctuation don't matter, and the aliases work too), so columns
- * can be moved around and any extra columns of your own are left alone.
- *   core:    added automatically when missing, because the app needs it
- *   managed: kept up to date by the app (grey header in the sheet). These only
- *            match their exact header, never an alias, because the app writes
- *            and clears them and must never take over a column of yours.
- * The other columns are optional: the app only shows them when they exist.
+ * Columns of the Inventory tab. Each one is found by its header (case, spaces
+ * and punctuation don't matter, and the aliases work too), so columns can be
+ * moved, and columns of your own are left alone.
+ *   layout:  part of a new Inventory tab
+ *   core:    added by setup when it's missing, because the emails need it
+ *   managed: filled in by the script (grey header). It only matches its exact
+ *            header, never an alias, so the script never writes in a column
+ *            of yours.
  */
 const FIELDS = [
   {
-    key: 'id', header: 'ID', type: 'text', core: true, managed: true, width: 80,
-    note: 'Assigned by the app. Leave it blank when you add a row by hand.',
-  },
-  {
-    key: 'name', header: 'Part Name', type: 'text', core: true, width: 260,
+    key: 'name', header: 'Part Name', layout: true, core: true, width: 260,
     aliases: ['Name', 'Part', 'Item', 'Item Name', 'Description', 'Part Description', 'Item Description'],
   },
   {
-    key: 'partNumber', header: 'Part Number', type: 'text', width: 140,
+    key: 'partNumber', header: 'Part Number', layout: true, width: 140,
     aliases: ['Part #', 'Part No', 'PN', 'P/N', 'SKU', 'MPN', 'Item Number', 'Item #', 'Model', 'Model Number',
       'Catalog Number', 'Mfr Part Number', 'Manufacturer Part Number'],
   },
   {
-    key: 'category', header: 'Category', type: 'text', width: 130,
-    aliases: ['Type', 'Group', 'Class', 'Part Type', 'Item Type'],
-  },
-  {
-    key: 'location', header: 'Location', type: 'text', width: 120,
+    key: 'location', header: 'Location', layout: true, width: 120,
     aliases: ['Bin', 'Shelf', 'Bin Location', 'Storage', 'Storage Location', 'Area'],
   },
   {
-    key: 'quantity', header: 'Quantity', type: 'number', core: true, width: 90,
+    key: 'quantity', header: 'Quantity', type: 'number', layout: true, core: true, width: 90,
     aliases: ['Qty On Hand', 'Quantity On Hand', 'On Hand', 'Qty', 'Current Qty', 'Current Stock', 'In Stock', 'Stock', 'Count'],
     note: 'How many are on hand right now.',
   },
   {
-    key: 'minQty', header: 'Min Qty', type: 'number', core: true, width: 90,
+    key: 'minQty', header: 'Min Qty', type: 'number', layout: true, core: true, width: 90,
     aliases: ['Min', 'Minimum', 'Min Quantity', 'Minimum Qty', 'Minimum Quantity', 'Min Stock', 'Minimum Stock',
       'Reorder Point', 'Reorder Level', 'Reorder At', 'Low Stock At', 'Alert At', 'Alert Level', 'Threshold',
       'Par', 'Par Level', 'Safety Stock'],
-    note: 'Low-stock level. An email goes out when Quantity drops to this number or below. Leave it blank for no emails.',
+    note: 'When Quantity drops to this number or below, the row turns yellow and an email goes out. Leave it blank for no emails.',
   },
   {
-    key: 'reorderQty', header: 'Reorder Qty', type: 'number', width: 100,
-    aliases: ['Reorder Quantity', 'Order Qty', 'Order Quantity', 'Reorder Amount', 'Qty To Order', 'Quantity To Order'],
-    note: 'How many to order when it runs low (shown in the email).',
-  },
-  {
-    key: 'unit', header: 'Unit', type: 'text', width: 70,
-    aliases: ['Units', 'UOM', 'Unit Of Measure', 'U/M'],
-  },
-  {
-    key: 'supplier', header: 'Supplier', type: 'text', width: 140,
-    aliases: ['Vendor', 'Supplier Name', 'Vendor Name', 'Source', 'Store'],
-  },
-  {
-    key: 'link', header: 'Order Link', type: 'link', core: true, width: 260,
+    key: 'link', header: 'Order Link', layout: true, core: true, width: 300,
     aliases: ['Link', 'Links', 'URL', 'Part Link', 'Product Link', 'Reorder Link', 'Purchase Link', 'Buy Link',
       'Order URL', 'Supplier Link', 'Website', 'Web Link'],
-    note: 'Web page to reorder the part from. Put extra links (other suppliers) on separate lines.',
+    note: 'The web page to reorder the part from. It goes in the email. For a second supplier, add its link after a space.',
   },
   {
-    key: 'unitCost', header: 'Unit Cost', type: 'number', width: 90,
-    aliases: ['Cost', 'Price', 'Unit Price', 'Cost Each', 'Price Each'],
+    key: 'ordered', header: 'Ordered', type: 'checkbox', layout: true, core: true, width: 80,
+    aliases: ['Ordered?', 'On Order'],
+    note: 'Tick it once more is on the way. Ticked parts are left out of the reminder emails, and the box unticks itself when the part is restocked.',
   },
   {
-    key: 'notes', header: 'Notes', type: 'text', width: 240,
+    key: 'notes', header: 'Notes', layout: true, width: 260,
     aliases: ['Note', 'Comments', 'Comment', 'Remarks'],
   },
   {
-    key: 'orderedAt', header: 'Ordered On', type: 'date', core: true, managed: true, width: 110,
-    note: 'Set by "Mark as ordered" in the app. Cleared automatically once the part is restocked.',
+    key: 'reorderQty', header: 'Reorder Qty', type: 'number',
+    aliases: ['Reorder Quantity', 'Order Qty', 'Order Quantity', 'Reorder Amount', 'Qty To Order', 'Quantity To Order'],
   },
   {
-    key: 'alertSentAt', header: 'Alert Sent', type: 'date', core: true, managed: true, width: 140,
-    note: 'When the low-stock email for this part went out. Cleared once the part is restocked, so the next time it runs low a new email goes out.',
+    key: 'unit', header: 'Unit',
+    aliases: ['Units', 'UOM', 'Unit Of Measure', 'U/M'],
   },
   {
-    key: 'updatedAt', header: 'Last Updated', type: 'date', core: true, managed: true, width: 140,
+    key: 'supplier', header: 'Supplier',
+    aliases: ['Vendor', 'Supplier Name', 'Vendor Name', 'Source', 'Store'],
   },
   {
-    key: 'updatedBy', header: 'Updated By', type: 'text', core: true, managed: true, width: 180,
+    key: 'alertSentAt', header: 'Alert Sent', type: 'date', layout: true, core: true, managed: true, width: 160,
+    note: 'Filled in when the low-stock email for this part goes out, and cleared once the part is restocked. Clear it yourself to get emailed about the part again.',
   },
 ];
 
@@ -113,496 +144,127 @@ const FIELD_BY_KEY = FIELDS.reduce(function (map, field) {
   return map;
 }, {});
 
-const REMINDER_CHOICES = ['Off', 'Daily', 'Weekdays', 'Weekly'];
+/** Columns shown in the Reorder tab, when the Inventory tab has them. */
+const REORDER_KEYS = ['name', 'partNumber', 'location', 'quantity', 'minQty', 'link'];
+const REORDER_TITLE = 'Parts at or below their Min Qty that aren\'t ticked as Ordered. This list updates by itself.';
+const NOTHING_TO_REORDER = 'Nothing needs reordering right now.';
 
-/** Rows of the Settings tab. Found by the label in column A. */
+/** Rows of the Settings tab. Each one is found by the label in column A. */
 const SETTINGS = [
   {
-    key: 'recipients', label: 'Alert email recipients', type: 'emails',
-    aliases: ['Alert emails', 'Recipients', 'Send alerts to', 'Email to'],
+    key: 'status', label: 'Status', type: 'status', default: 'Off',
+    aliases: ['Email alerts', 'Email status'],
+  },
+  {
+    key: 'recipients', label: 'Send emails to', type: 'emails',
+    aliases: ['Alert email recipients', 'Alert emails', 'Recipients', 'Send alerts to', 'Email to'],
     help: 'Who gets the low-stock emails. Separate several addresses with commas.',
   },
   {
-    key: 'alertsEnabled', label: 'Email as soon as a part runs low', type: 'boolean', default: true,
-    aliases: ['Instant alerts', 'Alerts enabled', 'Send alerts'],
-    help: 'Sends an email the moment a part drops to or below its Min Qty. Each part is emailed about once, and again only after it has been restocked and runs low again.',
+    key: 'alertsEnabled', label: 'Email right away when a part runs low', type: 'onoff', default: true,
+    aliases: ['Email as soon as a part runs low', 'Instant alerts', 'Alerts enabled', 'Send alerts'],
+    help: 'On: an email goes out as soon as a part drops to its Min Qty or below. Each part is emailed once, and again only after it has been restocked and runs low again.',
   },
   {
-    key: 'reminder', label: 'Reminder email', type: 'choice', choices: REMINDER_CHOICES, default: 'Weekdays',
+    key: 'reminder', label: 'Reminder email', type: 'choice', choices: ['Off', 'Daily', 'Weekdays', 'Weekly'], default: 'Weekdays',
     aliases: ['Reminder', 'Summary email', 'Digest'],
-    help: 'A summary of the parts that are still low and not ordered yet: Off, Daily, Weekdays, or Weekly (Mondays).',
+    help: 'A list of everything that is still low and not ticked as Ordered: Off, Daily, Weekdays, or Weekly (Mondays).',
   },
   {
     key: 'reminderHour', label: 'Reminder hour (0-23)', type: 'hour', default: 8,
     aliases: ['Reminder hour', 'Reminder time'],
-    help: 'Hour of the day for the reminder, in this spreadsheet\'s time zone (File > Settings). 8 = 8 AM, 14 = 2 PM.',
-  },
-  {
-    key: 'appName', label: 'App name', type: 'text', default: 'Parts Inventory',
-    aliases: ['Title', 'Company name'],
-    help: 'Shown at the top of the app and in email subjects.',
-  },
-  {
-    key: 'accessCode', label: 'App access code', type: 'text', default: '',
-    aliases: ['Access code', 'Passcode'],
-    help: 'Optional. When set, people must enter this code the first time they open the web app (6 characters or more). The person who deployed the app never needs it.',
-  },
-  {
-    key: 'appUrl', label: 'Web app URL', type: 'url', default: '',
-    aliases: ['App URL', 'App link'],
-    help: 'Link to the web app, used in emails. Filled in automatically the first time the web app is opened. If it stays empty, paste the web app URL (it ends in /exec) here.',
+    help: 'When the reminder goes out, in this spreadsheet\'s time zone (File > Settings). 8 is 8 AM, 14 is 2 PM.',
   },
 ];
 
-const LOG_HEADERS = ['Timestamp', 'Part ID', 'Part', 'Action', 'Change', 'Qty After', 'By', 'Note'];
+const SETTING_BY_KEY = SETTINGS.reduce(function (map, def) {
+  map[def.key] = def;
+  return map;
+}, {});
+
+/** What the Status row of the Settings tab says. */
+const STATUS_TEXT = {
+  off: 'Not turned on yet. To turn them on, open Extensions > Apps Script in this spreadsheet, paste in the Parts Inventory code, click Save, then click Run.',
+  on: 'Emails are sent from {owner}. The sheet is checked after every edit and once an hour.',
+  problem: 'The last email couldn\'t be sent: {error}. It will be tried again within the hour.',
+};
 
 /** Keys used in Script Properties. */
 const PROP = {
-  spreadsheetId: 'SPREADSHEET_ID',
-  nextId: 'NEXT_ID',
   triggersOwner: 'TRIGGERS_OWNER',
-  lastCheck: 'LAST_CHECK',
   lastReminderDate: 'LAST_REMINDER_DATE',
-  lastAlertError: 'LAST_ALERT_ERROR',
+  lastError: 'LAST_ERROR',
 };
 
 const TRIGGER_HANDLERS = ['onInventoryEdit', 'hourlyCheck'];
-const TEXT_LIMITS = { name: 200, partNumber: 100, category: 100, location: 100, unit: 30, supplier: 150, notes: 2000 };
-const NUMBER_INPUTS = { quantity: 'Quantity', minQty: 'Min Qty', reorderQty: 'Reorder Qty', unitCost: 'Unit cost' };
 const MAX_LINKS = 5;
 const EMAIL_CARDS = 25; // parts shown in full in one email
 const EMAIL_LIST = 150; // parts listed by name after those (Gmail caps an email at about 200 KB)
-const MAX_ACCESS_FAILURES = 20;
+const DATE_TIME_FORMAT = 'mmm d, yyyy h:mm am/pm';
+const YES_TEXT = /^(yes|y|x|ordered|true|on order)$/i;
+const NO_TEXT = /^(no|n|false|not ordered|-)$/i;
 
 const COLORS = {
   header: '#1f2937',
   managedHeader: '#6b7280',
+  helpText: '#6b7280',
   accent: '#0f766e',
+  reorderTab: '#b45309',
+  settingsTab: '#6b7280',
   outRow: '#fde2e1',
   lowRow: '#fff1c2',
 };
 
 // ---------------------------------------------------------------------------
-// Spreadsheet menu and web app entry points
+// Spreadsheet menu
 // ---------------------------------------------------------------------------
 
-/** Adds the Inventory menu when the spreadsheet opens. */
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Inventory')
-    .addItem('Open inventory app', 'menuOpenApp')
-    .addItem('Open in sidebar', 'menuOpenSidebar')
-    .addSeparator()
-    .addItem('Check stock and send alerts now', 'menuCheckNow')
-    .addItem('Send reminder email now', 'menuSendReminder')
-    .addItem('Send test email', 'menuSendTestEmail')
+    .addItem('Email the reorder list now', 'menuSendReorderList')
+    .addItem('Send a test email', 'menuSendTestEmail')
     .addSeparator()
     .addItem('Set up / repair', 'setup')
-    .addItem('Help', 'menuHelp')
     .addToUi();
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (ss && !ss.getSheetByName(SHEET_NAMES.inventory)) {
-      ss.toast('Choose Inventory > Set up / repair to get started.', 'Parts Inventory', 15);
-    }
-  } catch (err) {
-    // The hint is optional; never let it break the menu.
-  }
 }
 
-/** Serves the web app. ?part=P-0001 opens that part. */
-function doGet(e) {
-  const params = (e && e.parameter) || {};
-  const boot = { mode: 'webapp', part: String(params.part || '').slice(0, 40) };
-  let title = 'Parts Inventory';
-  try {
-    const ss = getSpreadsheet_();
-    ensureSetup_(ss);
-    let settings = getSettings_(ss);
-    if (rememberAppUrl_(ss, settings)) settings = getSettings_(ss);
-    title = settings.appName;
-    if (needsAccessCode_(settings)) {
-      boot.locked = true;
-      boot.appName = settings.appName;
-    } else {
-      boot.data = buildAppData_(ss, settings, currentUser_());
-    }
-  } catch (err) {
-    boot.error = errorMessage_(err);
-  }
-  return renderApp_(boot, title).addMetaTag('viewport', 'width=device-width, initial-scale=1');
-}
-
-function renderApp_(boot, title) {
-  // The one-file install (install/Code.gs) carries the page in INDEX_HTML_;
-  // otherwise it's the Index.html file next to this one.
-  const template = typeof INDEX_HTML_ === 'string'
-    ? HtmlService.createTemplate(INDEX_HTML_)
-    : HtmlService.createTemplateFromFile('Index');
-  template.bootJson = jsonForHtml_(jsonSafe_(boot));
-  return template.evaluate().setTitle(title || 'Parts Inventory');
-}
-
-/**
- * Creates or repairs the Inventory, Settings and Activity Log tabs and turns
- * on the automatic alerts. Safe to run again at any time.
- */
-function setup() {
-  requireSheetUser_();
-  const ss = getSpreadsheet_();
-  const report = withLock_(function () {
-    return setupSpreadsheet_(ss);
-  });
-  const ui = getUi_();
-  let triggers = installTriggers_(ss, false);
-  if (!triggers.installed && ui) {
-    const answer = ui.alert(
-      'Automatic alerts',
-      'Automatic alerts were turned on by ' + triggers.owner + '. Turn them on under your account as well? ' +
-      'Only do this if ' + triggers.owner + ' no longer has access to this spreadsheet.',
-      ui.ButtonSet.YES_NO);
-    if (answer === ui.Button.YES) triggers = installTriggers_(ss, true);
-  }
-  report.triggers = triggers;
-  if (ui) {
-    ss.setActiveSheet(ss.getSheetByName(SHEET_NAMES.inventory));
-    showDialog_(setupDoneHtml_(ss, report), 'Parts Inventory is ready', 560, 500);
-  } else {
-    console.log('Setup finished: ' + JSON.stringify(report));
-  }
-  return report;
-}
-
-function menuOpenApp() {
+function menuSendReorderList() {
   runMenu_(function (ss) {
-    const url = getSettings_(ss).appUrl || currentServiceUrl_();
-    if (!url) {
-      showDialog_(deployHelpHtml_(), 'Deploy the web app first', 560, 520);
-      return;
-    }
-    showDialog_(openLinkHtml_(url), 'Open inventory app', 380, 150);
-  });
-}
-
-function menuOpenSidebar() {
-  runMenu_(function (ss) {
-    ensureSetup_(ss);
-    const settings = getSettings_(ss);
-    const boot = { mode: 'sidebar', data: buildAppData_(ss, settings, currentUser_()) };
-    SpreadsheetApp.getUi().showSidebar(renderApp_(boot, settings.appName));
-  });
-}
-
-function menuCheckNow() {
-  runMenu_(function (ss) {
-    ensureSetup_(ss);
-    const result = withLock_(function () {
-      const inv = ensureCoreColumns_(readInventory_(ss));
-      assignMissingIds_(inv);
-      return processAlerts_(inv, getSettings_(ss));
-    });
-    alert_('Stock check', describeAlertResult_(result));
-  });
-}
-
-function menuSendReminder() {
-  runMenu_(function (ss) {
-    ensureSetup_(ss);
     const settings = getSettings_(ss);
     const result = withLock_(function () {
       return sendReminder_(ss, readInventory_(ss), settings, true);
     });
-    alert_('Reminder email', result.sent
-      ? 'Sent a reminder listing ' + countLabel_(result.count + result.onOrder, 'low part', 'low parts') +
+    alert_('Reorder list', result.sent
+      ? 'Emailed the list of ' + countLabel_(result.count + result.onOrder, 'low part', 'low parts') +
         ' to ' + settings.recipients.join(', ') + '.'
-      : 'Nothing is low right now, so no reminder was sent.');
+      : 'Nothing is low right now, so there was nothing to send.');
   });
 }
 
 function menuSendTestEmail() {
   runMenu_(function (ss) {
-    ensureSetup_(ss);
-    const result = sendTestEmail_(ss, getSettings_(ss));
-    alert_('Test email', 'Sent a test email to ' + result.recipients.join(', ') +
+    const settings = getSettings_(ss);
+    sendTestEmail_(ss, settings);
+    alert_('Test email', 'Sent a test email to ' + settings.recipients.join(', ') +
       '. If it doesn\'t arrive in a minute or two, check the spam folder.');
   });
 }
 
-function menuHelp() {
-  runMenu_(function (ss) {
-    showDialog_(helpHtml_(ss), 'Parts Inventory help', 600, 560);
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Web app API: functions called from Index.html with google.script.run.
-// Each call passes ctx = { code, actor }: the access code (when the owner set
-// one) and the name the person typed into the app, which goes into the
-// activity log when Google doesn't tell us who they are.
-// ---------------------------------------------------------------------------
-
-function apiGetData(ctx) {
-  return runApi_(ctx, function (c) {
-    return buildAppData_(c.ss, c.settings, c.user);
-  });
-}
-
-/** Adds a part (no id) or updates the fields sent for an existing part. */
-function apiSavePart(ctx, input) {
-  return runApi_(ctx, function (c) {
-    input = input || {};
-    const isNew = !input.id;
-    const clean = cleanPartInput_(input, isNew);
-    return withLock_(function () {
-      const inv = ensureCoreColumns_(readInventory_(c.ss));
-      const now = new Date();
-      if (isNew) {
-        const row = nextEmptyRow_(inv);
-        const fields = Object.assign({}, clean, {
-          id: nextId_(inv),
-          updatedAt: now,
-          updatedBy: c.actor,
-          orderedAt: null,
-          alertSentAt: null,
-        });
-        writeFields_(inv, row, fields);
-        const created = readPartAt_(inv, row);
-        logActivity_(c.ss, [{ part: created, action: 'Added', change: created.quantity, qtyAfter: created.quantity }], c.actor);
-        const alert = processAlerts_(inv, c.settings, [created]);
-        return { part: partForClient_(created), alert: alertForClient_(alert) };
-      }
-
-      const part = findPart_(inv, input.id);
-      const changes = {};
-      Object.keys(clean).forEach(function (key) {
-        if (!sameValue_(part[key], clean[key])) changes[key] = clean[key];
-      });
-      if (!Object.keys(changes).length) return { part: partForClient_(part), alert: null, unchanged: true };
-      writeFields_(inv, part.row, Object.assign({}, changes, { updatedAt: now, updatedBy: c.actor }));
-      const updated = readPartAt_(inv, part.row);
-      const entries = [];
-      if ('quantity' in changes) {
-        entries.push({
-          part: updated, action: 'Count set',
-          change: round_((updated.quantity || 0) - (part.quantity || 0), 3), qtyAfter: updated.quantity,
-        });
-      }
-      const edited = Object.keys(changes).filter(function (key) { return key !== 'quantity'; });
-      if (edited.length) {
-        entries.push({
-          part: updated, action: 'Edited', qtyAfter: updated.quantity,
-          note: 'Changed ' + edited.map(function (key) { return FIELD_BY_KEY[key].header; }).join(', '),
-        });
-      }
-      logActivity_(c.ss, entries, c.actor);
-      const alert = processAlerts_(inv, c.settings, [updated]);
-      return { part: partForClient_(updated), alert: alertForClient_(alert) };
-    });
-  });
-}
-
-/** request = { id, mode: 'add' | 'remove' | 'set', amount, note } */
-function apiAdjustStock(ctx, request) {
-  return runApi_(ctx, function (c) {
-    const req = request || {};
-    const mode = req.mode;
-    if (['add', 'remove', 'set'].indexOf(mode) === -1) throw new Error('Unknown stock change.');
-    const amount = parseInputNumber_(req.amount, 'Amount', 3);
-    if (amount === null) throw new Error('Enter an amount.');
-    if (mode !== 'set' && amount === 0) throw new Error('Enter an amount greater than zero.');
-    const note = cleanString_(req.note, false).slice(0, 300);
-    return withLock_(function () {
-      const inv = ensureCoreColumns_(readInventory_(c.ss));
-      const part = findPart_(inv, req.id);
-      const current = part.quantity || 0;
-      let next = mode === 'add' ? current + amount : mode === 'remove' ? current - amount : amount;
-      next = round_(next, 3);
-      if (next < 0) {
-        throw new Error('Only ' + formatQty_(current, part.unit) + ' on hand, so ' + formatNumber_(amount) +
-          ' can\'t be taken out. Use "Set count" if the real count is different.');
-      }
-      if (next > 1e9) throw new Error('That quantity is too large.');
-      writeFields_(inv, part.row, { quantity: next, updatedAt: new Date(), updatedBy: c.actor });
-      const updated = readPartAt_(inv, part.row);
-      const action = mode === 'add' ? 'Restocked' : mode === 'remove' ? 'Used' : 'Count set';
-      logActivity_(c.ss, [{ part: updated, action: action, change: round_(next - current, 3), qtyAfter: next, note: note }], c.actor);
-      const alert = processAlerts_(inv, c.settings, [updated]);
-      return { part: partForClient_(updated), alert: alertForClient_(alert) };
-    });
-  });
-}
-
-/** Marks a part as ordered (so reminders stop listing it) or clears that mark. */
-function apiSetOrdered(ctx, id, ordered) {
-  return runApi_(ctx, function (c) {
-    return withLock_(function () {
-      const inv = ensureCoreColumns_(readInventory_(c.ss));
-      const part = findPart_(inv, id);
-      writeFields_(inv, part.row, { orderedAt: ordered ? new Date() : null, updatedAt: new Date(), updatedBy: c.actor });
-      const updated = readPartAt_(inv, part.row);
-      logActivity_(c.ss, [{ part: updated, action: ordered ? 'Marked ordered' : 'Order mark cleared', qtyAfter: updated.quantity }], c.actor);
-      return { part: partForClient_(updated) };
-    });
-  });
-}
-
-function apiDeletePart(ctx, id) {
-  return runApi_(ctx, function (c) {
-    return withLock_(function () {
-      const inv = readInventory_(c.ss);
-      const part = findPart_(inv, id);
-      if (inv.sheet.getMaxRows() - inv.headerRow <= 1) {
-        // Sheets can't delete the last row below the header, so blank it out instead.
-        inv.sheet.getRange(part.row, 1, 1, inv.sheet.getLastColumn()).clearContent();
-      } else {
-        inv.sheet.deleteRow(part.row);
-      }
-      logActivity_(c.ss, [{ part: part, action: 'Deleted', change: part.quantity ? -part.quantity : null, qtyAfter: 0 }], c.actor);
-      return { id: part.id };
-    });
-  });
-}
-
-/** options = { partId, limit } */
-function apiGetActivity(ctx, options) {
-  return runApi_(ctx, function (c) {
-    const opts = options || {};
-    const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 500);
-    return { entries: readActivity_(c.ss, String(opts.partId || ''), limit) };
-  });
-}
-
-function apiSaveSettings(ctx, input) {
-  return runApi_(ctx, function (c) {
-    requireOwner_(c.user);
-    const clean = cleanSettingsInput_(input || {});
-    withLock_(function () {
-      writeSettings_(c.ss, clean);
-    });
-    return { settings: settingsForClient_(getSettings_(c.ss), c.user) };
-  });
-}
-
-function apiSendTestEmail(ctx) {
-  return runApi_(ctx, function (c) {
-    requireOwner_(c.user);
-    return sendTestEmail_(c.ss, c.settings);
-  });
-}
-
-function apiSendReminderNow(ctx) {
-  return runApi_(ctx, function (c) {
-    requireOwner_(c.user);
-    return withLock_(function () {
-      return sendReminder_(c.ss, readInventory_(c.ss), c.settings, true);
-    });
-  });
-}
-
-function runApi_(ctx, handler) {
+function runMenu_(fn) {
   const ss = getSpreadsheet_();
-  ensureSetup_(ss);
-  const settings = getSettings_(ss);
-  const user = checkAccess_(ctx, settings);
-  return jsonSafe_(handler({ ss: ss, settings: settings, user: user, actor: actorName_(ctx, user) }));
-}
-
-function buildAppData_(ss, settings, user) {
-  let inv = readInventory_(ss);
-  if (needsIdRepair_(inv)) {
-    inv = withLock_(function () {
-      const fresh = ensureCoreColumns_(readInventory_(ss));
-      assignMissingIds_(fresh);
-      return fresh;
-    });
-  }
-  const props = PropertiesService.getScriptProperties();
-  const fields = {};
-  FIELDS.forEach(function (field) {
-    fields[field.key] = !!field.core || !!inv.cols[field.key];
-  });
-  let quota = null;
   try {
-    quota = MailApp.getRemainingDailyQuota();
+    fn(ss);
   } catch (err) {
-    quota = null;
+    alert_('Parts Inventory', errorMessage_(err));
   }
-  return {
-    version: APP_VERSION,
-    parts: inv.parts.map(partForClient_),
-    fields: fields,
-    settings: settingsForClient_(settings, user),
-    user: { email: user.email, isOwner: user.isOwner },
-    info: {
-      spreadsheetName: ss.getName(),
-      spreadsheetUrl: ss.getUrl(),
-      timeZone: ss.getSpreadsheetTimeZone(),
-      sender: user.owner,
-      emailQuota: quota,
-      lastCheck: props.getProperty(PROP.lastCheck) || '',
-      alertsInstalled: !!props.getProperty(PROP.triggersOwner),
-      lastAlertError: parseJson_(props.getProperty(PROP.lastAlertError)),
-    },
-    serverTime: new Date().toISOString(),
-  };
-}
-
-function partForClient_(p) {
-  return {
-    id: p.id,
-    name: p.name,
-    partNumber: p.partNumber,
-    category: p.category,
-    location: p.location,
-    quantity: p.quantity,
-    minQty: p.minQty,
-    reorderQty: p.reorderQty,
-    unit: p.unit,
-    supplier: p.supplier,
-    link: p.link,
-    links: p.links,
-    unitCost: p.unitCost,
-    notes: p.notes,
-    ordered: p.ordered,
-    orderedAt: p.orderedAt,
-    alerted: p.alerted,
-    alertSentAt: p.alertSentAt,
-    updatedAt: p.updatedAt,
-    updatedBy: p.updatedBy,
-    status: stockStatus_(p),
-    needsReorder: needsReorder_(p),
-  };
-}
-
-function settingsForClient_(s, user) {
-  return {
-    recipients: s.recipients,
-    alertsEnabled: s.alertsEnabled,
-    reminder: s.reminder,
-    reminderHour: s.reminderHour,
-    appName: s.appName,
-    appUrl: s.appUrl,
-    accessCodeSet: !!s.accessCode,
-    accessCode: user.isOwner ? s.accessCode : '',
-  };
-}
-
-function alertForClient_(result) {
-  if (!result || !result.parts.length) return null;
-  return {
-    sent: result.sent,
-    count: result.parts.length,
-    recipients: result.recipients,
-    error: result.error,
-    skipped: result.skipped,
-  };
 }
 
 // ---------------------------------------------------------------------------
-// Automatic triggers (installed by setup)
+// Automatic triggers (turned on by setup)
 // ---------------------------------------------------------------------------
 
-/** Runs when someone edits the spreadsheet by hand. */
+/** Runs after every edit in the spreadsheet. */
 function onInventoryEdit(e) {
   try {
     if (!e || !e.range || typeof e.range.getSheet !== 'function') return;
@@ -610,105 +272,38 @@ function onInventoryEdit(e) {
     if (sheet.getName() !== SHEET_NAMES.inventory) return;
     const ss = sheet.getParent();
     withLock_(function () {
-      handleInventoryEdit_(ss, e);
+      const inv = readInventory_(ss);
+      const startRow = e.range.getRow();
+      const endRow = startRow + e.range.getNumRows() - 1;
+      const edited = inv.parts.filter(function (p) { return p.row >= startRow && p.row <= endRow; });
+      if (edited.length) processAlerts_(inv, getSettings_(ss), edited);
     });
   } catch (err) {
     console.error('onInventoryEdit failed: ' + errorMessage_(err));
   }
 }
 
-function handleInventoryEdit_(ss, e) {
-  const inv = ensureCoreColumns_(readInventory_(ss));
-  const startRow = e.range.getRow();
-  const endRow = startRow + e.range.getNumRows() - 1;
-  const startCol = e.range.getColumn();
-  const endCol = startCol + e.range.getNumColumns() - 1;
-  if (endRow <= inv.headerRow) return;
-
-  assignMissingIds_(inv);
-  const edited = inv.parts.filter(function (p) { return p.row >= startRow && p.row <= endRow; });
-  if (!edited.length) return;
-
-  const touched = function (key) {
-    const col = inv.cols[key];
-    return !!col && col >= startCol && col <= endCol;
-  };
-  const managedCols = FIELDS.filter(function (f) { return f.managed && inv.cols[f.key]; })
-    .map(function (f) { return inv.cols[f.key]; });
-  let userEdit = false;
-  for (let col = startCol; col <= endCol; col++) {
-    if (managedCols.indexOf(col) === -1) userEdit = true;
-  }
-
-  let editor = '';
-  try {
-    editor = e.user && typeof e.user.getEmail === 'function' ? e.user.getEmail() : '';
-  } catch (err) {
-    editor = '';
-  }
-  editor = editor || 'Spreadsheet edit';
-
-  if (userEdit) {
-    const now = new Date();
-    writeColumnValues_(inv, 'updatedAt', edited.map(function (p) { return { row: p.row, value: now }; }));
-    writeColumnValues_(inv, 'updatedBy', edited.map(function (p) { return { row: p.row, value: editor }; }));
-  }
-
-  if (edited.length === 1 && startRow === endRow && startCol === endCol && touched('quantity')) {
-    const part = edited[0];
-    const before = toNumberOrNull_(e.oldValue);
-    if (before !== part.quantity) {
-      logActivity_(ss, [{
-        part: part, action: 'Count set',
-        change: before !== null && part.quantity !== null ? round_(part.quantity - before, 3) : null,
-        qtyAfter: part.quantity, note: 'Edited in the spreadsheet',
-      }], editor);
-    }
-  }
-
-  if (touched('quantity') || touched('minQty')) {
-    processAlerts_(inv, getSettings_(ss), edited);
-  }
-}
-
-/** Runs every hour: catches anything missed and sends the reminder email. */
-function hourlyCheck(e) {
-  // Public functions can also be called from the web app page. The hourly
-  // trigger and the owner run this freely; anyone else at most every 10
-  // minutes, so nobody can keep the inventory busy by calling it in a loop.
-  if (!isOwnTrigger_(e) && !currentUser_().isOwner) {
-    const cache = CacheService.getScriptCache();
-    if (cache.get('HOURLY_CHECK_CALLED')) return;
-    cache.put('HOURLY_CHECK_CALLED', '1', 600);
-  }
+/** Runs every hour: catches anything the edit check missed and sends the reminder. */
+function hourlyCheck() {
   const ss = getSpreadsheet_();
   if (!ss.getSheetByName(SHEET_NAMES.inventory)) return;
   withLock_(function () {
-    const inv = ensureCoreColumns_(readInventory_(ss));
-    assignMissingIds_(inv);
+    const inv = readInventory_(ss);
     const settings = getSettings_(ss);
     processAlerts_(inv, settings);
     sendReminderIfDue_(ss, inv, settings, new Date());
-    PropertiesService.getScriptProperties().setProperty(PROP.lastCheck, new Date().toISOString());
   });
-}
-
-/** True for the event of one of this script's own triggers. */
-function isOwnTrigger_(e) {
-  const uid = e && e.triggerUid ? String(e.triggerUid) : '';
-  if (!uid) return false;
-  return ScriptApp.getProjectTriggers().some(function (t) { return String(t.getUniqueId()) === uid; });
 }
 
 function installTriggers_(ss, force) {
   const props = PropertiesService.getScriptProperties();
-  const me = effectiveEmail_();
+  const me = effectiveEmail_() || 'the account that ran setup';
   const owner = props.getProperty(PROP.triggersOwner);
   const existing = ScriptApp.getProjectTriggers().filter(function (t) {
     return TRIGGER_HANDLERS.indexOf(t.getHandlerFunction()) !== -1;
   });
-  // Triggers belong to the person who created them and are invisible to
-  // everyone else, so don't quietly add a second set for another person.
+  // Triggers belong to the person who made them and nobody else can see them,
+  // so don't quietly add a second set (and send every email twice).
   if (owner && owner !== me && !existing.length && !force) return { installed: false, owner: owner };
   existing.forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('onInventoryEdit').forSpreadsheet(ss).onEdit().create();
@@ -718,10 +313,10 @@ function installTriggers_(ss, force) {
 }
 
 // ---------------------------------------------------------------------------
-// Low-stock alerts and emails
+// Low-stock emails
 // ---------------------------------------------------------------------------
 
-/** True when the part is at or below its Min Qty (blank Min Qty = no alerts). */
+/** At or below its Min Qty. A blank Min Qty means no emails for the part. */
 function needsReorder_(p) {
   return p.minQty !== null && p.quantity !== null && p.quantity <= p.minQty;
 }
@@ -730,75 +325,69 @@ function isOut_(p) {
   return p.quantity !== null && p.quantity <= 0;
 }
 
-function stockStatus_(p) {
-  if (isOut_(p)) return 'out';
-  if (needsReorder_(p)) return 'low';
-  return 'ok';
-}
-
 /**
- * Emails parts that have just dropped to or below their Min Qty (one email for
- * all of them) and clears the alert and "ordered" marks of restocked parts.
+ * Emails the parts that have just dropped to or below their Min Qty (one email
+ * for all of them), and clears Alert Sent and Ordered on restocked parts.
  * Call while holding the lock. `parts` defaults to every part.
  */
 function processAlerts_(inv, settings, parts) {
-  const result = { sent: false, parts: [], recipients: [], error: '', skipped: '' };
+  const result = { sent: false, parts: [], error: '', skipped: '' };
   const newlyLow = [];
+  const clearAlert = [];
+  const clearOrdered = [];
   (parts || inv.parts).forEach(function (p) {
     if (needsReorder_(p)) {
       if (!p.alerted) newlyLow.push(p);
-      return;
-    }
-    const clear = {};
-    if (p.alerted) clear.alertSentAt = null;
-    if (p.ordered && stockStatus_(p) === 'ok') clear.orderedAt = null;
-    if (Object.keys(clear).length) {
-      writeFields_(inv, p.row, clear);
-      if ('alertSentAt' in clear) { p.alertSentAt = null; p.alerted = false; }
-      if ('orderedAt' in clear) { p.orderedAt = null; p.ordered = false; }
+    } else if (p.quantity !== null) {
+      if (p.alerted) clearAlert.push(p);
+      if (p.ordered && p.minQty !== null) clearOrdered.push(p);
     }
   });
+  if (clearAlert.length && inv.cols.alertSentAt) {
+    writeCells_(inv.sheet, inv.cols.alertSentAt, clearAlert.map(function (p) { return { row: p.row, value: '' }; }));
+    clearAlert.forEach(function (p) { p.alerted = false; });
+  }
+  if (clearOrdered.length) {
+    // A ticked box goes back to unticked; "yes" or a date is cleared.
+    writeCells_(inv.sheet, inv.cols.ordered, clearOrdered.map(function (p) {
+      return { row: p.row, value: p.orderedRaw === true ? false : '' };
+    }));
+    clearOrdered.forEach(function (p) { p.ordered = false; });
+  }
   if (!newlyLow.length) return result;
 
   newlyLow.sort(byUrgency_);
-  result.parts = newlyLow.map(function (p) { return p.id; });
+  result.parts = newlyLow.map(displayName_);
   if (!inv.cols.alertSentAt) {
-    result.skipped = 'The Inventory tab has no "Alert Sent" column. Run Inventory > Set up / repair.';
+    result.skipped = 'The Inventory tab has no "Alert Sent" column. Choose Inventory > Set up / repair.';
     return result;
   }
   if (!settings.alertsEnabled) {
-    result.skipped = 'Instant emails are turned off in Settings.';
+    result.skipped = 'Emailing right away is turned off in the Settings tab.';
     return result;
   }
   if (!settings.recipients.length) {
-    result.skipped = 'No alert email recipients are set.';
+    result.skipped = 'No one is listed next to "Send emails to" in the Settings tab.';
     return result;
   }
   try {
-    sendLowStockEmail_(inv.ss, settings, newlyLow, 'alert');
+    sendEmail_(inv.ss, settings, buildEmail_(inv, settings, newlyLow, 'alert'));
   } catch (err) {
     result.error = errorMessage_(err);
-    recordAlertError_(result.error);
+    recordError_(inv.ss, result.error);
     return result;
   }
   const now = new Date();
-  writeColumnValues_(inv, 'alertSentAt', newlyLow.map(function (p) { return { row: p.row, value: now }; }));
-  newlyLow.forEach(function (p) {
-    p.alertSentAt = now;
-    p.alerted = true;
-  });
-  logActivity_(inv.ss, newlyLow.map(function (p) {
-    return { part: p, action: 'Alert emailed', qtyAfter: p.quantity, note: 'To ' + settings.recipients.join(', ') };
-  }), 'Automatic');
-  PropertiesService.getScriptProperties().deleteProperty(PROP.lastAlertError);
+  writeCells_(inv.sheet, inv.cols.alertSentAt, newlyLow.map(function (p) { return { row: p.row, value: now }; }));
+  newlyLow.forEach(function (p) { p.alerted = true; });
+  clearError_(inv.ss);
   result.sent = true;
-  result.recipients = settings.recipients.slice();
   return result;
 }
 
 /** Sends the scheduled reminder when it is due (at most once a day). */
 function sendReminderIfDue_(ss, inv, settings, now) {
-  if (settings.reminder === 'Off') return null;
+  if (settings.reminder === 'Off' || !settings.recipients.length) return null;
   const tz = ss.getSpreadsheetTimeZone();
   const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
   if (Number(Utilities.formatDate(now, tz, 'H')) < settings.reminderHour) return null;
@@ -807,76 +396,72 @@ function sendReminderIfDue_(ss, inv, settings, now) {
   if (settings.reminder === 'Weekly' && dow !== 1) return null;
   const props = PropertiesService.getScriptProperties();
   if (props.getProperty(PROP.lastReminderDate) === today) return null;
-  if (!settings.recipients.length) return null;
   try {
     const result = sendReminder_(ss, inv, settings, false);
     props.setProperty(PROP.lastReminderDate, today);
+    if (result.sent) clearError_(ss);
     return result;
   } catch (err) {
-    recordAlertError_(errorMessage_(err));
+    recordError_(ss, errorMessage_(err));
     return null;
   }
 }
 
 /**
- * Emails the parts that are low and not marked as ordered (plus the ones on
- * order, for context). With force, also sends when every low part is ordered.
+ * Emails the low parts that aren't ticked as Ordered, plus the ones that are,
+ * for context. With force, also sends when every low part is ordered.
  */
 function sendReminder_(ss, inv, settings, force) {
   const low = inv.parts.filter(needsReorder_).sort(byUrgency_);
   const toOrder = low.filter(function (p) { return !p.ordered; });
   const onOrder = low.filter(function (p) { return p.ordered; });
   if (!toOrder.length && !(force && onOrder.length)) return { sent: false, count: 0, onOrder: onOrder.length };
-  if (!settings.recipients.length) throw new Error('Add an alert email recipient in Settings first.');
-  sendLowStockEmail_(ss, settings, toOrder, 'reminder', { onOrder: onOrder });
-  return { sent: true, count: toOrder.length, onOrder: onOrder.length, recipients: settings.recipients.slice() };
+  sendEmail_(ss, settings, buildEmail_(inv, settings, toOrder, 'reminder', onOrder));
+  return { sent: true, count: toOrder.length, onOrder: onOrder.length };
 }
 
 function sendTestEmail_(ss, settings) {
-  if (!settings.recipients.length) throw new Error('Add an alert email recipient in Settings first.');
   const inv = readInventory_(ss);
-  let sample = inv.parts.filter(needsReorder_).slice(0, 3);
-  if (!sample.length) sample = inv.parts.filter(function (p) { return p.links.length; }).slice(0, 1);
-  if (!sample.length) sample = [samplePart_()];
-  sendLowStockEmail_(ss, settings, sample, 'test');
-  return { recipients: settings.recipients.slice() };
+  sendEmail_(ss, settings, buildEmail_(inv, settings, inv.parts.filter(needsReorder_).sort(byUrgency_), 'test'));
 }
 
-function sendLowStockEmail_(ss, settings, parts, kind, extra) {
-  const email = buildEmail_(ss, settings, parts, kind, extra);
+function sendEmail_(ss, settings, email) {
+  if (!settings.recipients.length) {
+    throw new Error('No one is listed next to "Send emails to" in the Settings tab');
+  }
   if (MailApp.getRemainingDailyQuota() < settings.recipients.length) {
-    throw new Error('Google\'s daily email limit for this account has been reached. The app will try again later.');
+    throw new Error('Google\'s daily email limit for this account has been reached');
   }
   MailApp.sendEmail({
     to: settings.recipients.join(','),
     subject: email.subject,
     body: email.text,
     htmlBody: email.html,
-    name: settings.appName,
+    name: appName_(ss),
   });
-  return email;
 }
 
-function buildEmail_(ss, settings, parts, kind, extra) {
-  const onOrder = (extra && extra.onOrder) || [];
-  const tz = ss.getSpreadsheetTimeZone();
-  const appUrl = settings.appUrl;
+function buildEmail_(inv, settings, parts, kind, onOrder) {
+  onOrder = onOrder || [];
+  const ss = inv.ss;
   let subject;
   let heading;
   let intro;
   if (kind === 'test') {
-    subject = 'Test: low-stock emails are working';
-    heading = 'Low-stock emails are working';
-    intro = 'This is a test. When a part drops to or below its Min Qty, an email like this goes to ' +
-      settings.recipients.join(', ') + ' with the links for reordering it.';
+    subject = 'Low-stock emails are on';
+    heading = 'Low-stock emails are on';
+    intro = 'When a part drops to its Min Qty or below, an email like this goes to ' + settings.recipients.join(', ') +
+      ' with the part\'s order link. ' + (parts.length
+      ? 'These parts are low right now:'
+      : 'Nothing is low right now.');
   } else if (kind === 'reminder') {
     subject = parts.length
       ? 'Reminder: ' + countLabel_(parts.length, 'part needs', 'parts need') + ' ordering'
       : 'Reminder: ' + countLabel_(onOrder.length, 'low part is', 'low parts are') + ' on order';
     heading = parts.length ? 'Parts that still need ordering' : 'Low parts that are on order';
     intro = parts.length
-      ? 'These parts are at or below their minimum and haven\'t been marked as ordered yet.'
-      : 'Every low part has been marked as ordered.';
+      ? 'These parts are at or below their Min Qty and aren\'t ticked as Ordered yet.'
+      : 'Every low part is ticked as Ordered.';
   } else if (parts.length === 1) {
     const p = parts[0];
     const out = isOut_(p);
@@ -885,33 +470,34 @@ function buildEmail_(ss, settings, parts, kind, extra) {
     heading = displayName_(p) + (out ? ' is out of stock' : ' is running low');
     intro = out
       ? 'There are none left.'
-      : 'Only ' + formatQty_(p.quantity, p.unit) + ' left. The minimum is ' + formatNumber_(p.minQty) + '.';
+      : 'Only ' + formatQty_(p.quantity, p.unit) + ' left. The Min Qty is ' + formatNumber_(p.minQty) + '.';
   } else {
     subject = 'Low stock: ' + parts.length + ' parts need ordering';
     heading = parts.length + ' parts are running low';
-    intro = 'These parts have dropped to or below their minimum stock level.';
+    intro = 'These parts have dropped to or below their Min Qty.';
   }
-  subject = '[' + settings.appName + '] ' + subject;
+  subject = '[' + appName_(ss) + '] ' + subject;
 
+  const sheetUrl = ss.getUrl();
+  const rowUrl = function (p) { return sheetUrl + '#gid=' + inv.sheet.getSheetId() + '&range=A' + p.row; };
+  const reorderSheet = ss.getSheetByName(SHEET_NAMES.reorder);
   const font = '-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif';
-  const cards = partsHtml_(parts, appUrl, tz);
   const orderedCards = onOrder.length
-    ? '<h2 style="font-size:16px;margin:24px 0 10px;color:#1f2937;">Already on order</h2>' + partsHtml_(onOrder, appUrl, tz)
+    ? '<h2 style="font-size:16px;margin:24px 0 10px;color:#1f2937;">Already ordered</h2>' + partsHtml_(onOrder, rowUrl)
     : '';
   const footerLinks = [
-    appUrl ? linkHtml_(appUrl, 'Open the inventory app') : '',
-    linkHtml_(ss.getUrl(), 'Open the spreadsheet'),
+    linkHtml_(sheetUrl, 'Open the spreadsheet'),
+    reorderSheet ? linkHtml_(sheetUrl + '#gid=' + reorderSheet.getSheetId(), 'See the Reorder tab') : '',
   ].filter(String).join(' &nbsp;&middot;&nbsp; ');
-  const footerNote = 'You get these emails because your address is listed under "Alert email recipients" ' +
-    'in the Settings tab of "' + ss.getName() + '".';
+  const footerNote = 'You get these emails because your address is in the Settings tab of "' + appName_(ss) + '".';
   const html =
     '<div style="background:#f3f4f6;padding:24px 12px;font-family:' + font + ';color:#1f2937;">' +
     '<div style="max-width:600px;margin:0 auto;">' +
     '<div style="font-size:13px;font-weight:600;color:' + COLORS.accent + ';margin-bottom:6px;">' +
-    escapeHtml_(settings.appName) + '</div>' +
+    escapeHtml_(appName_(ss)) + '</div>' +
     '<h1 style="font-size:22px;line-height:1.3;margin:0 0 8px;color:#111827;">' + escapeHtml_(heading) + '</h1>' +
     '<p style="font-size:15px;line-height:1.5;margin:0 0 20px;color:#374151;">' + escapeHtml_(intro) + '</p>' +
-    cards + orderedCards +
+    partsHtml_(parts, rowUrl) + orderedCards +
     '<p style="font-size:14px;margin:24px 0 8px;">' + footerLinks + '</p>' +
     '<p style="font-size:12px;line-height:1.5;margin:0;color:#6b7280;">' + escapeHtml_(footerNote) + '</p>' +
     '</div></div>';
@@ -919,16 +505,15 @@ function buildEmail_(ss, settings, parts, kind, extra) {
   const lines = [heading, '', intro, ''];
   pushPartsText_(lines, parts);
   if (onOrder.length) {
-    lines.push('Already on order:', '');
+    lines.push('Already ordered:', '');
     pushPartsText_(lines, onOrder);
   }
-  if (appUrl) lines.push('Inventory app: ' + appUrl);
-  lines.push('Spreadsheet: ' + ss.getUrl(), '', footerNote);
+  lines.push('Spreadsheet: ' + sheetUrl, '', footerNote);
   return { subject: subject, html: html, text: lines.join('\n') };
 }
 
-function partsHtml_(parts, appUrl, tz) {
-  const html = parts.slice(0, EMAIL_CARDS).map(function (p) { return partCardHtml_(p, appUrl, tz); }).join('');
+function partsHtml_(parts, rowUrl) {
+  const html = parts.slice(0, EMAIL_CARDS).map(function (p) { return partCardHtml_(p, rowUrl(p)); }).join('');
   const rest = parts.slice(EMAIL_CARDS);
   if (!rest.length) return html;
   const listed = rest.slice(0, EMAIL_LIST);
@@ -943,7 +528,7 @@ function partsHtml_(parts, appUrl, tz) {
     '<div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin:0 0 12px;">' +
     '<div style="font-size:15px;font-weight:600;margin-bottom:8px;color:#111827;">And ' + rest.length + ' more</div>' +
     '<ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.4;">' + items + '</ul>' +
-    (more ? '<div style="font-size:13px;color:#6b7280;margin-top:8px;">Plus ' + more + ' more. Open the app to see them all.</div>' : '') +
+    (more ? '<div style="font-size:13px;color:#6b7280;margin-top:8px;">Plus ' + more + ' more. See the Reorder tab for all of them.</div>' : '') +
     '</div>';
 }
 
@@ -951,7 +536,7 @@ function pushPartsText_(lines, parts) {
   parts.slice(0, EMAIL_CARDS).forEach(function (p) { lines.push(partText_(p), ''); });
   const rest = parts.slice(EMAIL_CARDS);
   rest.slice(0, EMAIL_LIST).forEach(function (p) { lines.push('* ' + displayName_(p) + ': ' + shortStock_(p)); });
-  if (rest.length > EMAIL_LIST) lines.push('...plus ' + (rest.length - EMAIL_LIST) + ' more. Open the app to see them all.');
+  if (rest.length > EMAIL_LIST) lines.push('...plus ' + (rest.length - EMAIL_LIST) + ' more. See the Reorder tab for all of them.');
   if (rest.length) lines.push('');
 }
 
@@ -960,14 +545,14 @@ function shortStock_(p) {
     (p.minQty !== null ? ' (min ' + formatNumber_(p.minQty) + ')' : '');
 }
 
-function partCardHtml_(p, appUrl, tz) {
+function partCardHtml_(p, rowUrl) {
   const out = isOut_(p);
   const color = out ? '#b91c1c' : '#b45309';
   const status = out ? 'Out of stock' : formatQty_(p.quantity, p.unit) + ' on hand';
   const details = [
     p.minQty !== null ? 'min ' + formatNumber_(p.minQty) : '',
     p.reorderQty !== null ? 'order ' + formatQty_(p.reorderQty, p.unit) : '',
-    p.ordered ? 'ordered' + (p.orderedAt ? ' ' + Utilities.formatDate(p.orderedAt, tz, 'MMM d') : '') : '',
+    p.ordered ? 'ticked as ordered' : '',
   ].filter(String).join(' \u00b7 ');
   const meta = [
     p.partNumber ? 'Part # ' + p.partNumber : '',
@@ -994,8 +579,8 @@ function partCardHtml_(p, appUrl, tz) {
     (p.notes ? '<div style="font-size:13px;color:#4b5563;margin-top:6px;white-space:pre-wrap;">' +
       escapeHtml_(truncate_(p.notes, 300)) + '</div>' : '') +
     (buttons || '<div style="font-size:13px;color:#6b7280;margin-top:8px;">No order link saved for this part yet.</div>') +
-    (appUrl ? '<div style="margin-top:10px;"><a href="' + escapeHtml_(partUrl_(appUrl, p.id)) +
-      '" style="font-size:13px;color:#6b7280;">View in the app</a></div>' : '') +
+    '<div style="margin-top:10px;"><a href="' + escapeHtml_(rowUrl) +
+    '" style="font-size:13px;color:#6b7280;">Show it in the spreadsheet</a></div>' +
     '</td></tr></table>';
 }
 
@@ -1004,7 +589,7 @@ function partText_(p) {
   const extra = [
     p.minQty !== null ? 'min ' + formatNumber_(p.minQty) : '',
     p.reorderQty !== null ? 'order ' + formatQty_(p.reorderQty, p.unit) : '',
-    p.ordered ? 'ordered' : '',
+    p.ordered ? 'ticked as ordered' : '',
   ].filter(String).join(', ');
   const lines = ['* ' + displayName_(p) + ': ' + qty + (extra ? ' (' + extra + ')' : '')];
   const meta = [p.partNumber ? 'Part # ' + p.partNumber : '', p.location, p.supplier].filter(String).join(' / ');
@@ -1018,35 +603,25 @@ function byUrgency_(a, b) {
   return (isOut_(b) ? 1 : 0) - (isOut_(a) ? 1 : 0) || a.row - b.row;
 }
 
-function samplePart_() {
-  return {
-    id: 'P-0000', name: 'Example part (you have no parts yet)', partNumber: 'ABC-123', location: 'Shelf 1',
-    supplier: 'Example Supplier', quantity: 2, minQty: 5, reorderQty: 20, unit: 'ea', notes: '',
-    links: ['https://www.example.com/'], ordered: false, orderedAt: null,
-  };
+function recordError_(ss, message) {
+  PropertiesService.getScriptProperties().setProperty(PROP.lastError, String(message).slice(0, 300));
+  updateStatus_(ss);
 }
 
-function describeAlertResult_(r) {
-  const n = r.parts.length;
-  if (r.sent) return 'Emailed a low-stock alert for ' + countLabel_(n, 'part', 'parts') + ' to ' + r.recipients.join(', ') + '.';
-  if (r.error) return 'Couldn\'t send the alert email: ' + r.error;
-  if (r.skipped) return countLabel_(n, 'part is', 'parts are') + ' low, but no email was sent. ' + r.skipped;
-  return 'No new low-stock parts. Parts that were already emailed about aren\'t emailed again until they are ' +
-    'restocked. Use "Send reminder email now" for a list of everything that is low.';
-}
-
-function recordAlertError_(message) {
-  PropertiesService.getScriptProperties().setProperty(PROP.lastAlertError,
-    JSON.stringify({ at: new Date().toISOString(), message: String(message).slice(0, 500) }));
+function clearError_(ss) {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty(PROP.lastError) === null) return;
+  props.deleteProperty(PROP.lastError);
+  updateStatus_(ss);
 }
 
 // ---------------------------------------------------------------------------
-// Inventory tab: reading and writing
+// Inventory tab
 // ---------------------------------------------------------------------------
 
 function readInventory_(ss) {
   const sheet = ss.getSheetByName(SHEET_NAMES.inventory);
-  if (!sheet) throw new Error('The Inventory tab is missing. Open the spreadsheet and choose Inventory > Set up / repair.');
+  if (!sheet) throw new Error('The Inventory tab is missing. Choose Inventory > Set up / repair.');
   const lastRow = sheet.getLastRow();
   const lastCol = Math.max(sheet.getLastColumn(), 1);
   const values = lastRow > 0 ? sheet.getRange(1, 1, lastRow, lastCol).getValues() : [];
@@ -1065,24 +640,16 @@ function readInventory_(ss) {
   return { ss: ss, sheet: sheet, values: values, headerRow: headerRow, cols: cols, parts: parts };
 }
 
-function readPartAt_(inv, row) {
-  const values = inv.sheet.getRange(row, 1, 1, Math.max(inv.sheet.getLastColumn(), 1)).getValues()[0];
-  const links = inv.cols.link ? readLinkUrls_(inv.sheet, row, inv.cols.link, 1)[0] : null;
-  return rowToPart_(values, inv.cols, row, links);
-}
-
 function rowToPart_(row, cols, rowNumber, extraLinks) {
   const get = function (key) { return cols[key] ? row[cols[key] - 1] : ''; };
-  const id = cellText_(get('id'));
   const name = cellText_(get('name'));
   const partNumber = cellText_(get('partNumber'));
-  if (!id && !name && !partNumber) return null;
+  if (!name && !partNumber) return null;
   // A "Total" row under the list isn't a part.
-  if (!id && !partNumber && /^(grand\s*|sub\s*)?totals?\s*:?$/i.test(name)) return null;
-  const link = cellText_(get('link'));
+  if (!partNumber && /^(grand\s*|sub\s*)?totals?\s*:?$/i.test(name)) return null;
   const links = [];
   const seen = {};
-  parseLinks_(link).concat(extraLinks || []).forEach(function (url) {
+  parseLinks_(cellText_(get('link'))).concat(extraLinks || []).forEach(function (url) {
     const clean = normalizeUrl_(url);
     // Sheets turns typed URLs into links, sometimes as http:// or with a
     // trailing slash, so compare without those to avoid listing a link twice.
@@ -1092,32 +659,30 @@ function rowToPart_(row, cols, rowNumber, extraLinks) {
       links.push(clean);
     }
   });
-  const orderedRaw = get('orderedAt');
-  const alertRaw = get('alertSentAt');
+  const orderedRaw = get('ordered');
   return {
     row: rowNumber,
-    id: id,
     name: name,
     partNumber: partNumber,
-    category: cellText_(get('category')),
     location: cellText_(get('location')),
     quantity: toNumberOrNull_(get('quantity')),
     minQty: toNumberOrNull_(get('minQty')),
     reorderQty: toNumberOrNull_(get('reorderQty')),
     unit: cellText_(get('unit')),
     supplier: cellText_(get('supplier')),
-    link: link,
-    links: links.slice(0, MAX_LINKS),
-    unitCost: toNumberOrNull_(get('unitCost')),
     notes: cellText_(get('notes')),
-    // A date, a ticked box or text like "yes" counts as set; blank, unticked or "no" doesn't.
-    ordered: isMarked_(orderedRaw),
-    orderedAt: toDateOrNull_(orderedRaw),
-    alerted: isMarked_(alertRaw),
-    alertSentAt: toDateOrNull_(alertRaw),
-    updatedAt: toDateOrNull_(get('updatedAt')),
-    updatedBy: cellText_(get('updatedBy')),
+    links: links.slice(0, MAX_LINKS),
+    ordered: isOrdered_(orderedRaw),
+    orderedRaw: orderedRaw,
+    alerted: isMarked_(get('alertSentAt')),
   };
+}
+
+/** A ticked box, "yes" or a date counts as ordered. Anything else doesn't, and is never cleared. */
+function isOrdered_(value) {
+  if (value === true) return true;
+  if (isDate_(value)) return !isNaN(value.getTime());
+  return typeof value === 'string' && YES_TEXT.test(value.trim());
 }
 
 /** Link URLs hidden behind rich text links or =HYPERLINK() formulas in the link column. */
@@ -1178,7 +743,7 @@ function mapColumns_(headers) {
   const taken = {};
   const cols = {};
   FIELDS.forEach(function (field) {
-    const names = [field.header].concat(field.aliases || []).map(normalizeHeader_);
+    const names = [field.header].concat(field.managed ? [] : field.aliases || []).map(normalizeHeader_);
     for (let n = 0; n < names.length; n++) {
       for (let i = 0; i < normalized.length; i++) {
         if (!taken[i] && normalized[i] && normalized[i] === names[n]) {
@@ -1192,116 +757,17 @@ function mapColumns_(headers) {
   return cols;
 }
 
-/** Adds any missing core columns to the end of the Inventory tab. Returns a fresh read if it did. */
-function ensureCoreColumns_(inv) {
-  const missing = FIELDS.filter(function (f) { return f.core && !inv.cols[f.key]; });
-  if (!missing.length) return inv;
-  addColumns_(inv.sheet, inv.headerRow, missing);
-  return readInventory_(inv.ss);
-}
-
-function addColumns_(sheet, headerRow, fields) {
-  const start = sheet.getLastColumn() + 1;
-  const needed = start + fields.length - 1;
-  if (sheet.getMaxColumns() < needed) sheet.insertColumnsAfter(sheet.getMaxColumns(), needed - sheet.getMaxColumns());
-  sheet.getRange(headerRow, start, 1, fields.length).setValues([fields.map(function (f) { return f.header; })]);
-  styleHeaders_(sheet, headerRow, start, fields);
-}
-
-/** Writes several fields of one row. Only fields that have a column are written. */
-function writeFields_(inv, row, fields) {
-  const cells = Object.keys(fields)
-    .filter(function (key) { return FIELD_BY_KEY[key] && inv.cols[key]; })
-    .map(function (key) { return { key: key, col: inv.cols[key], value: fields[key] }; })
-    .sort(function (a, b) { return a.col - b.col; });
-  // One write per run of neighbouring columns keeps this fast without
-  // touching any of your own columns in between.
+/** Writes values into one column. updates = [{ row, value }]; one write per run of neighbouring rows. */
+function writeCells_(sheet, col, updates) {
+  const sorted = updates.slice().sort(function (a, b) { return a.row - b.row; });
   let i = 0;
-  while (i < cells.length) {
+  while (i < sorted.length) {
     let j = i;
-    while (j + 1 < cells.length && cells[j + 1].col === cells[j].col + 1) j++;
-    const run = cells.slice(i, j + 1);
-    const range = inv.sheet.getRange(row, run[0].col, 1, run.length);
-    const plain = plainTextCells_(range)[0];
-    range.setValues([run.map(function (c, k) { return toCell_(c.key, c.value, plain[k]); })]);
+    while (j + 1 < sorted.length && sorted[j + 1].row === sorted[j].row + 1) j++;
+    const run = sorted.slice(i, j + 1);
+    sheet.getRange(run[0].row, col, run.length, 1).setValues(run.map(function (u) { return [u.value]; }));
     i = j + 1;
   }
-}
-
-/** Writes one field for several rows with a single range write. updates = [{ row, value }] */
-function writeColumnValues_(inv, key, updates) {
-  const col = inv.cols[key];
-  if (!col || !updates.length) return;
-  let min = Infinity;
-  let max = -Infinity;
-  updates.forEach(function (u) {
-    min = Math.min(min, u.row);
-    max = Math.max(max, u.row);
-  });
-  const range = inv.sheet.getRange(min, col, max - min + 1, 1);
-  const plain = plainTextCells_(range);
-  if (updates.length === 1) {
-    range.setValue(toCell_(key, updates[0].value, plain[0][0]));
-    return;
-  }
-  const block = range.getValues().map(function (r, k) {
-    return [typeof r[0] === 'string' && !plain[k][0] ? safeCell_(r[0]) : r[0]];
-  });
-  updates.forEach(function (u) { block[u.row - min][0] = toCell_(key, u.value, plain[u.row - min][0]); });
-  range.setValues(block);
-}
-
-function toCell_(key, value, plainText) {
-  const field = FIELD_BY_KEY[key];
-  if (value === null || value === undefined || value === '') return '';
-  if (field.type === 'number') return Number(value);
-  if (field.type === 'date') return isDate_(value) ? value : new Date(value);
-  const text = String(value);
-  // Plain-text cells keep what's written as is, apostrophes included, so there
-  // only a leading "=" needs guarding.
-  if (plainText) return text.charAt(0) === '=' ? "'" + text : text;
-  return safeCell_(text);
-}
-
-/** Which cells are formatted as Plain text (Format > Number > Plain text). */
-function plainTextCells_(range) {
-  let formats = null;
-  try {
-    formats = range.getNumberFormats();
-  } catch (err) {
-    formats = null;
-  }
-  const out = [];
-  for (let r = 0; r < range.getNumRows(); r++) {
-    out.push([]);
-    for (let c = 0; c < range.getNumColumns(); c++) out[r].push(!!formats && formats[r][c] === '@');
-  }
-  return out;
-}
-
-/**
- * Sheets reads text the way it reads typing: "00123" becomes 123, "3-4" becomes
- * a date and "=..." becomes a formula. A leading apostrophe keeps it as text
- * (the apostrophe itself isn't stored).
- */
-function safeCell_(value) {
-  if (typeof value !== 'string' || value === '') return value;
-  return /^[=+\-@'#]/.test(value) || /\d/.test(value) || /^(true|false)$/i.test(value) ? "'" + value : value;
-}
-
-/** The first empty row after the last part. */
-function nextEmptyRow_(inv) {
-  let lastPartRow = inv.headerRow;
-  inv.parts.forEach(function (p) { lastPartRow = Math.max(lastPartRow, p.row); });
-  const row = lastPartRow + 1;
-  const existing = inv.values[row - 1];
-  const occupied = existing && Object.keys(inv.cols).some(function (key) {
-    return !isBlank_(existing[inv.cols[key] - 1]);
-  });
-  // Something like a totals row right under the list: add the part above it.
-  if (occupied) inv.sheet.insertRowAfter(lastPartRow);
-  ensureRows_(inv.sheet, row);
-  return row;
 }
 
 function ensureRows_(sheet, lastNeededRow) {
@@ -1309,159 +775,8 @@ function ensureRows_(sheet, lastNeededRow) {
   if (lastNeededRow > max) sheet.insertRowsAfter(max, lastNeededRow - max);
 }
 
-function findPart_(inv, id) {
-  const key = String(id || '').trim().toUpperCase();
-  const part = key ? inv.parts.find(function (p) { return p.id.toUpperCase() === key; }) : null;
-  if (!part) throw new Error('That part wasn\'t found. It may have been deleted or changed. Refresh and try again.');
-  return part;
-}
-
-function needsIdRepair_(inv) {
-  if (!inv.cols.id) return inv.parts.length > 0;
-  const seen = {};
-  return inv.parts.some(function (p) {
-    const key = p.id.toUpperCase();
-    if (!key || seen[key]) return true;
-    seen[key] = true;
-    return false;
-  });
-}
-
-/** Gives every part a unique ID (rows added by hand, or copied rows that share one). */
-function assignMissingIds_(inv) {
-  if (!inv.cols.id) return 0;
-  const seen = {};
-  const updates = [];
-  let next = firstFreeIdNumber_(inv);
-  inv.parts.forEach(function (p) {
-    const key = p.id.toUpperCase();
-    if (key && !seen[key]) {
-      seen[key] = true;
-      return;
-    }
-    let id;
-    do {
-      id = formatId_(next++);
-    } while (seen[id]);
-    seen[id] = true;
-    p.id = id;
-    updates.push({ row: p.row, value: id });
-  });
-  if (!updates.length) return 0;
-  writeColumnValues_(inv, 'id', updates);
-  PropertiesService.getScriptProperties().setProperty(PROP.nextId, String(next));
-  return updates.length;
-}
-
-function nextId_(inv) {
-  const n = firstFreeIdNumber_(inv);
-  PropertiesService.getScriptProperties().setProperty(PROP.nextId, String(n + 1));
-  return formatId_(n);
-}
-
-/** IDs are never reused, even after a part is deleted, so old log entries stay unambiguous. */
-function firstFreeIdNumber_(inv) {
-  let n = Number(PropertiesService.getScriptProperties().getProperty(PROP.nextId)) || 1;
-  inv.parts.forEach(function (p) {
-    const match = /^P-(\d+)$/i.exec(p.id);
-    if (match) n = Math.max(n, Number(match[1]) + 1);
-  });
-  return n;
-}
-
-function formatId_(n) {
-  return 'P-' + String(n).padStart(4, '0');
-}
-
-// ---------------------------------------------------------------------------
-// Input checks
-// ---------------------------------------------------------------------------
-
-function cleanPartInput_(input, isNew) {
-  const out = {};
-  Object.keys(TEXT_LIMITS).forEach(function (key) {
-    if (!(key in input)) return;
-    const value = cleanString_(input[key], key === 'notes');
-    if (value.length > TEXT_LIMITS[key]) {
-      throw new Error(FIELD_BY_KEY[key].header + ' is too long (' + TEXT_LIMITS[key] + ' characters at most).');
-    }
-    out[key] = value;
-  });
-  if ((isNew || 'name' in out) && !out.name) throw new Error('Give the part a name.');
-  Object.keys(NUMBER_INPUTS).forEach(function (key) {
-    if (!(key in input)) return;
-    const value = parseInputNumber_(input[key], NUMBER_INPUTS[key], key === 'unitCost' ? 4 : 3);
-    if (value === null && key === 'quantity') throw new Error('Enter the quantity on hand (0 if there are none).');
-    out[key] = value;
-  });
-  if ('link' in input) out.link = cleanLinks_(input.link);
-  if (isNew && !('quantity' in out)) out.quantity = 0;
-  return out;
-}
-
-function parseInputNumber_(value, label, decimals) {
-  if (value === null || value === undefined || String(value).trim() === '') return null;
-  const n = typeof value === 'number' ? value : Number(String(value).replace(/,/g, '').trim());
-  if (!isFinite(n)) throw new Error(label + ' must be a number.');
-  if (n < 0) throw new Error(label + ' can\'t be negative.');
-  if (n > 1e9) throw new Error(label + ' is too large.');
-  return round_(n, decimals);
-}
-
-function cleanLinks_(value) {
-  const tokens = String(value == null ? '' : value).split(/\s+/).filter(String);
-  if (tokens.length > MAX_LINKS) throw new Error('Add at most ' + MAX_LINKS + ' order links.');
-  const urls = tokens.map(function (token) {
-    const url = normalizeUrl_(token);
-    if (!url) {
-      throw new Error('"' + truncate_(token, 60) + '" doesn\'t look like a web link. ' +
-        'Paste the full address, like https://www.example.com/part-page');
-    }
-    return url;
-  });
-  const joined = urls.join('\n');
-  if (joined.length > 2000) throw new Error('The order links are too long.');
-  return joined;
-}
-
-function cleanSettingsInput_(input) {
-  const out = {};
-  if ('recipients' in input) {
-    const list = Array.isArray(input.recipients) ? input.recipients.map(String) : parseEmails_(input.recipients);
-    const bad = list.filter(function (email) { return !isEmail_(email); });
-    if (bad.length) throw new Error('"' + truncate_(bad[0], 80) + '" isn\'t a valid email address.');
-    if (list.length > 20) throw new Error('Use 20 alert email addresses at most.');
-    out.recipients = uniqueEmails_(list);
-  }
-  if ('alertsEnabled' in input) out.alertsEnabled = input.alertsEnabled === true;
-  if ('reminder' in input) {
-    if (REMINDER_CHOICES.indexOf(input.reminder) === -1) throw new Error('Pick how often to send the reminder.');
-    out.reminder = input.reminder;
-  }
-  if ('reminderHour' in input) {
-    const hour = Number(input.reminderHour);
-    if (!(hour >= 0 && hour <= 23 && Math.floor(hour) === hour)) throw new Error('The reminder hour must be 0 to 23.');
-    out.reminderHour = hour;
-  }
-  if ('appName' in input) {
-    const name = cleanString_(input.appName, false);
-    if (!name) throw new Error('The app name can\'t be empty.');
-    if (name.length > 60) throw new Error('Keep the app name under 60 characters.');
-    out.appName = name;
-  }
-  if ('accessCode' in input) {
-    const code = String(input.accessCode == null ? '' : input.accessCode).trim();
-    if (code && code.length < 6) throw new Error('Use at least 6 characters for the access code.');
-    if (code.length > 64) throw new Error('Keep the access code under 64 characters.');
-    out.accessCode = code;
-  }
-  if ('appUrl' in input) {
-    const raw = String(input.appUrl == null ? '' : input.appUrl).trim();
-    const url = raw ? normalizeUrl_(raw) : '';
-    if (raw && !(url && /^https:\/\//i.test(url))) throw new Error('The web app URL should start with https://');
-    out.appUrl = url;
-  }
-  return out;
+function isEmptySheet_(sheet) {
+  return sheet.getLastRow() === 0 && sheet.getLastColumn() === 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1480,9 +795,9 @@ function getSettings_(ss) {
 function readSettingsRows_(sheet) {
   const found = {};
   if (!sheet || sheet.getLastRow() < 1) return found;
-  sheet.getRange(1, 1, sheet.getLastRow(), 2).getValues().forEach(function (row, i) {
+  sheet.getRange(1, 1, sheet.getLastRow(), 3).getValues().forEach(function (row, i) {
     const def = findSettingDef_(row[0]);
-    if (def && !found[def.key]) found[def.key] = { row: i + 1, value: row[1] };
+    if (def && !found[def.key]) found[def.key] = { row: i + 1, value: row[1], help: row[2] };
   });
   return found;
 }
@@ -1497,249 +812,224 @@ function findSettingDef_(label) {
 
 function parseSettingValue_(def, raw) {
   if (def.type === 'emails') return uniqueEmails_(parseEmails_(raw).filter(isEmail_));
-  if (def.type === 'boolean') return isBlank_(raw) ? def.default : toBoolean_(raw);
+  if (def.type === 'onoff') {
+    if (typeof raw === 'boolean') return raw;
+    const text = String(raw == null ? '' : raw).trim();
+    if (/^(on|yes|y|true|1)$/i.test(text)) return true;
+    if (/^(off|no|n|false|0)$/i.test(text)) return false;
+    return def.default;
+  }
   if (def.type === 'choice') {
     const text = String(raw == null ? '' : raw).trim().toLowerCase();
     return def.choices.find(function (c) { return text && text.indexOf(c.toLowerCase()) === 0; }) || def.default;
   }
-  if (def.type === 'hour') {
-    const hour = typeof raw === 'number' ? raw : parseInt(raw, 10);
-    return hour >= 0 && hour <= 23 ? Math.floor(hour) : def.default;
-  }
-  if (def.type === 'url') return normalizeUrl_(raw) || '';
+  if (def.type === 'hour') return parseHour_(raw, def.default);
   return cellText_(raw) || def.default;
 }
 
+/** 8, "8", "8 AM", "2 PM" or "14:00" as an hour from 0 to 23. */
+function parseHour_(raw, fallback) {
+  if (typeof raw === 'number') return raw >= 0 && raw < 24 ? Math.floor(raw) : fallback;
+  const m = /^(\d{1,2})(?::00)?\s*([ap])?\.?\s*m?\.?$/i.exec(String(raw == null ? '' : raw).trim());
+  if (!m) return fallback;
+  let hour = Number(m[1]);
+  if (m[2]) {
+    if (hour < 1 || hour > 12) return fallback;
+    hour = hour % 12 + (m[2].toLowerCase() === 'p' ? 12 : 0);
+  }
+  return hour <= 23 ? hour : fallback;
+}
+
 function writeSettings_(ss, values) {
-  const sheet = ss.getSheetByName(SHEET_NAMES.settings) || createSettingsSheet_(ss);
+  const sheet = ss.getSheetByName(SHEET_NAMES.settings);
   const found = readSettingsRows_(sheet);
   Object.keys(values).forEach(function (key) {
-    const def = SETTINGS.find(function (d) { return d.key === key; });
-    if (!def) return;
-    let row = found[key] && found[key].row;
-    if (!row) row = appendSettingRow_(sheet, def);
+    const def = SETTING_BY_KEY[key];
+    const row = (found[key] && found[key].row) || appendSettingRow_(sheet, def);
     sheet.getRange(row, 2).setValue(settingCellValue_(def, values[key]));
   });
 }
 
 function settingCellValue_(def, value) {
   if (def.type === 'emails') return safeCell_((value || []).join(', '));
-  if (def.type === 'boolean') return value === true;
+  if (def.type === 'onoff') return value ? 'On' : 'Off';
   if (def.type === 'hour') return Number(value);
   return safeCell_(String(value == null ? '' : value));
 }
 
-function defaultSettingValue_(def) {
-  if (def.type === 'emails') {
-    const me = effectiveEmail_();
-    return me ? [me] : [];
-  }
-  return def.default;
-}
-
 function appendSettingRow_(sheet, def) {
-  const row = sheet.getLastRow() + 1;
+  const row = Math.max(sheet.getLastRow(), 1) + 1;
   ensureRows_(sheet, row);
-  sheet.getRange(row, 1, 1, 3).setValues([[def.label, '', def.help].map(safeCell_)]);
+  sheet.getRange(row, 1, 1, 3).setValues([[def.label, '', def.help || ''].map(safeCell_)]);
   sheet.getRange(row, 1).setFontWeight('bold');
-  sheet.getRange(row, 3).setFontColor('#6b7280').setWrap(true);
+  sheet.getRange(row, 3).setFontColor(COLORS.helpText).setWrap(true);
   const cell = sheet.getRange(row, 2);
-  if (def.type === 'boolean') cell.insertCheckboxes();
-  if (def.type === 'choice') {
-    cell.setDataValidation(SpreadsheetApp.newDataValidation()
-      .requireValueInList(def.choices, true).setAllowInvalid(false).build());
-  }
+  if (def.type === 'onoff') cell.setDataValidation(listRule_(['On', 'Off']));
+  if (def.type === 'choice') cell.setDataValidation(listRule_(def.choices));
   if (def.type === 'hour') {
     cell.setDataValidation(SpreadsheetApp.newDataValidation()
       .requireNumberBetween(0, 23).setAllowInvalid(false).setHelpText('A whole number from 0 to 23.').build());
   }
+  if (def.type === 'status') cell.setFontWeight('bold');
   return row;
 }
 
-// ---------------------------------------------------------------------------
-// Activity Log tab
-// ---------------------------------------------------------------------------
-
-/** entries = [{ part, action, change, qtyAfter, note }] */
-function logActivity_(ss, entries, by) {
-  if (!entries || !entries.length) return;
-  const sheet = ss.getSheetByName(SHEET_NAMES.log) || createLogSheet_(ss);
-  const now = new Date();
-  const rows = entries.map(function (e) {
-    return [
-      now,
-      safeCell_(e.part.id || ''),
-      safeCell_(displayName_(e.part)),
-      safeCell_(e.action),
-      typeof e.change === 'number' ? e.change : '',
-      typeof e.qtyAfter === 'number' ? e.qtyAfter : '',
-      safeCell_(by || ''),
-      safeCell_(e.note || ''),
-    ];
-  });
-  const start = sheet.getLastRow() + 1;
-  ensureRows_(sheet, start + rows.length - 1);
-  sheet.getRange(start, 1, rows.length, LOG_HEADERS.length).setValues(rows);
+function listRule_(choices) {
+  return SpreadsheetApp.newDataValidation().requireValueInList(choices, true).setAllowInvalid(false).build();
 }
 
-function readActivity_(ss, partId, limit) {
-  const sheet = ss.getSheetByName(SHEET_NAMES.log);
-  if (!sheet) return [];
-  const last = sheet.getLastRow();
-  if (last < 2) return [];
-  // When filtering by part, look further back so a quiet part still shows its history.
-  const count = Math.min(last - 1, partId ? 5000 : limit);
-  const width = Math.min(LOG_HEADERS.length, sheet.getMaxColumns());
-  const values = sheet.getRange(last - count + 1, 1, count, width).getValues();
-  const wanted = partId.toUpperCase();
-  const entries = [];
-  for (let i = values.length - 1; i >= 0 && entries.length < limit; i--) {
-    const r = values[i];
-    if (wanted && cellText_(r[1]).toUpperCase() !== wanted) continue;
-    entries.push({
-      at: toDateOrNull_(r[0]),
-      partId: cellText_(r[1]),
-      part: cellText_(r[2]),
-      action: cellText_(r[3]),
-      change: toNumberOrNull_(r[4]),
-      qtyAfter: toNumberOrNull_(r[5]),
-      by: cellText_(r[6]),
-      note: cellText_(r[7]),
-    });
+/** Shows in the Settings tab whether the emails are on, and the last problem if there is one. */
+function updateStatus_(ss) {
+  const sheet = ss.getSheetByName(SHEET_NAMES.settings);
+  if (!sheet) return;
+  const props = PropertiesService.getScriptProperties();
+  const owner = props.getProperty(PROP.triggersOwner);
+  const error = props.getProperty(PROP.lastError);
+  let value = 'Off';
+  let help = STATUS_TEXT.off;
+  if (owner && error) {
+    value = 'Problem';
+    help = STATUS_TEXT.problem.replace('{error}', error.replace(/\.$/, ''));
+  } else if (owner) {
+    value = 'On';
+    help = STATUS_TEXT.on.replace('{owner}', owner);
   }
-  return entries;
+  const found = readSettingsRows_(sheet);
+  const row = found.status ? found.status.row : appendSettingRow_(sheet, SETTING_BY_KEY.status);
+  const current = found.status ? [found.status.value, found.status.help] : ['', ''];
+  if (current[0] === value && current[1] === help) return;
+  sheet.getRange(row, 2, 1, 2).setValues([[value, safeCell_(help)]]);
 }
 
 // ---------------------------------------------------------------------------
-// Setup
+// Setting up the tabs
 // ---------------------------------------------------------------------------
 
-/** Creates the tabs the app needs, or adds what's missing. Call while holding the lock. */
+/** Creates the tabs, or adds what's missing. Call while holding the lock. */
 function setupSpreadsheet_(ss) {
-  const report = { created: [], addedColumns: [], addedSettings: [], missingOptional: [] };
-  const isEmpty = function (s) { return s.getLastRow() === 0 && s.getLastColumn() === 0; };
+  const report = { created: [], addedColumns: [], reorder: '' };
   let sheet = ss.getSheetByName(SHEET_NAMES.inventory);
-  if (!sheet || isEmpty(sheet)) {
-    if (!sheet) {
-      const sheets = ss.getSheets();
-      sheet = sheets.length === 1 && isEmpty(sheets[0])
-        ? sheets[0].setName(SHEET_NAMES.inventory)
-        : ss.insertSheet(SHEET_NAMES.inventory, 0);
-    }
-    createInventoryLayout_(sheet);
+  if (!sheet) {
+    const sheets = ss.getSheets();
+    sheet = sheets.length === 1 && isEmptySheet_(sheets[0])
+      ? sheets[0].setName(SHEET_NAMES.inventory)
+      : ss.insertSheet(SHEET_NAMES.inventory, 0);
     report.created.push(SHEET_NAMES.inventory);
+  }
+  if (isEmptySheet_(sheet)) {
+    createInventoryLayout_(sheet);
   } else {
-    const inv = readInventory_(ss);
-    const missing = FIELDS.filter(function (f) { return f.core && !inv.cols[f.key]; });
-    if (missing.length) addColumns_(sheet, inv.headerRow, missing);
+    const found = readInventory_(ss);
+    const missing = FIELDS.filter(function (f) { return f.core && !found.cols[f.key]; });
+    if (missing.length) addColumns_(sheet, found.headerRow, missing);
     report.addedColumns = missing.map(function (f) { return f.header; });
-    report.missingOptional = FIELDS.filter(function (f) { return !f.core && !inv.cols[f.key]; })
-      .map(function (f) { return f.header; });
   }
   const inv = readInventory_(ss);
+  const first = inv.headerRow + 1;
+  ensureRows_(sheet, first);
+  const rows = sheet.getMaxRows() - inv.headerRow;
+  if (inv.cols.ordered) makeCheckboxes_(sheet, first, inv.cols.ordered, rows);
+  sheet.getRange(first, inv.cols.alertSentAt, rows, 1).setNumberFormat(DATE_TIME_FORMAT);
   applyStockHighlighting_(sheet, inv.headerRow, inv.cols);
-  assignMissingIds_(inv);
+  addHeaderNotes_(inv);
 
-  const settingsSheet = ss.getSheetByName(SHEET_NAMES.settings);
-  if (!settingsSheet) {
-    createSettingsSheet_(ss);
-    report.created.push(SHEET_NAMES.settings);
-  } else {
-    const found = readSettingsRows_(settingsSheet);
-    SETTINGS.forEach(function (def) {
-      if (found[def.key]) return;
-      const row = appendSettingRow_(settingsSheet, def);
-      settingsSheet.getRange(row, 2).setValue(settingCellValue_(def, defaultSettingValue_(def)));
-      report.addedSettings.push(def.label);
-    });
-  }
-
-  if (!ss.getSheetByName(SHEET_NAMES.log)) {
-    createLogSheet_(ss);
-    report.created.push(SHEET_NAMES.log);
-  }
-  PropertiesService.getScriptProperties().setProperty(PROP.spreadsheetId, ss.getId());
+  report.reorder = setupReorderSheet_(ss, inv);
+  setupSettingsSheet_(ss, report);
   return report;
 }
 
-/**
- * Sets the spreadsheet up the first time the web app or sidebar is used,
- * so the Set up menu item is optional.
- */
-function ensureSetup_(ss) {
-  if (ss.getSheetByName(SHEET_NAMES.inventory) && ss.getSheetByName(SHEET_NAMES.settings)) return false;
-  withLock_(function () {
-    setupSpreadsheet_(ss);
-  });
-  if (!PropertiesService.getScriptProperties().getProperty(PROP.triggersOwner)) {
-    try {
-      installTriggers_(ss, false);
-    } catch (err) {
-      console.warn('Could not turn on automatic alerts: ' + errorMessage_(err));
-    }
-  }
-  return true;
-}
-
 function createInventoryLayout_(sheet) {
-  sheet.getRange(1, 1, 1, FIELDS.length).setValues([FIELDS.map(function (f) { return f.header; })]);
-  styleHeaders_(sheet, 1, 1, FIELDS);
+  const fields = FIELDS.filter(function (f) { return f.layout; });
+  sheet.getRange(1, 1, 1, fields.length).setValues([fields.map(function (f) { return f.header; })]);
+  styleHeaders_(sheet, 1, 1, fields, true);
   sheet.setFrozenRows(1);
   sheet.setTabColor(COLORS.accent);
-  const rows = Math.max(sheet.getMaxRows() - 1, 1);
-  ensureRows_(sheet, rows + 1);
-  const col = function (key) { return FIELDS.indexOf(FIELD_BY_KEY[key]) + 1; };
-  const numberRule = SpreadsheetApp.newDataValidation()
-    .requireNumberGreaterThanOrEqualTo(0)
-    .setAllowInvalid(false)
-    .setHelpText('Enter a number (0 or more).')
-    .build();
-  ['quantity', 'minQty', 'reorderQty', 'unitCost'].forEach(function (key) {
-    sheet.getRange(2, col(key), rows, 1).setDataValidation(numberRule);
-  });
-  sheet.getRange(2, col('unitCost'), rows, 1).setNumberFormat('#,##0.00');
-  sheet.getRange(2, col('orderedAt'), rows, 1).setNumberFormat('yyyy-mm-dd');
-  ['alertSentAt', 'updatedAt'].forEach(function (key) {
-    sheet.getRange(2, col(key), rows, 1).setNumberFormat('yyyy-mm-dd hh:mm');
-  });
-  sheet.getRange(2, col('link'), rows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+  fields.forEach(function (f, i) { formatNewColumn_(sheet, 1, i + 1, f); });
 }
 
-function styleHeaders_(sheet, headerRow, startCol, fields) {
+function addColumns_(sheet, headerRow, fields) {
+  const start = sheet.getLastColumn() + 1;
+  const needed = start + fields.length - 1;
+  if (sheet.getMaxColumns() < needed) sheet.insertColumnsAfter(sheet.getMaxColumns(), needed - sheet.getMaxColumns());
+  sheet.getRange(headerRow, start, 1, fields.length).setValues([fields.map(function (f) { return f.header; })]);
+  styleHeaders_(sheet, headerRow, start, fields, true);
+  fields.forEach(function (f, i) { formatNewColumn_(sheet, headerRow, start + i, f); });
+}
+
+/** Number checks for a column the script just added. Columns of yours are left as they are. */
+function formatNewColumn_(sheet, headerRow, col, field) {
+  ensureRows_(sheet, headerRow + 1);
+  const range = sheet.getRange(headerRow + 1, col, sheet.getMaxRows() - headerRow, 1);
+  if (field.type === 'number') {
+    range.setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireNumberGreaterThanOrEqualTo(0).setAllowInvalid(false).setHelpText('Enter a number (0 or more).').build());
+  }
+  if (field.key === 'link') range.setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+}
+
+function styleHeaders_(sheet, headerRow, startCol, fields, withNotes) {
   fields.forEach(function (field, i) {
     const cell = sheet.getRange(headerRow, startCol + i);
     cell.setFontWeight('bold')
       .setFontColor('#ffffff')
       .setBackground(field.managed ? COLORS.managedHeader : COLORS.header);
-    if (field.note) cell.setNote(field.note);
+    if (withNotes && field.note) cell.setNote(field.note);
     if (field.width) sheet.setColumnWidth(startCol + i, field.width);
   });
 }
 
-/** Colours low rows amber and out-of-stock rows red, right in the spreadsheet. */
+/** Explains the columns the emails depend on, on hover. A note that's already there stays. */
+function addHeaderNotes_(inv) {
+  FIELDS.forEach(function (field) {
+    const col = inv.cols[field.key];
+    if (!field.note || !col) return;
+    const cell = inv.sheet.getRange(inv.headerRow, col);
+    if (!cell.getNote()) cell.setNote(field.note);
+  });
+}
+
+/** Turns the Ordered column into tick boxes, keeping what's already marked. */
+function makeCheckboxes_(sheet, firstRow, col, numRows) {
+  const range = sheet.getRange(firstRow, col, numRows, 1);
+  const updates = [];
+  range.getValues().forEach(function (r, i) {
+    const text = typeof r[0] === 'string' ? r[0].trim() : '';
+    if (!text) return;
+    if (YES_TEXT.test(text)) updates.push({ row: firstRow + i, value: true });
+    else if (NO_TEXT.test(text)) updates.push({ row: firstRow + i, value: false });
+  });
+  writeCells_(sheet, col, updates);
+  range.setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+}
+
+/** Colours low rows yellow and out-of-stock rows red, right in the spreadsheet. */
 function applyStockHighlighting_(sheet, headerRow, cols) {
   if (!cols.quantity) return;
   const first = headerRow + 1;
   ensureRows_(sheet, first);
-  const qty = '$' + columnLetter_(cols.quantity) + first;
   const range = sheet.getRange(first, 1, sheet.getMaxRows() - headerRow, sheet.getMaxColumns());
-  const rules = [
-    SpreadsheetApp.newConditionalFormatRule()
-      .whenFormulaSatisfied('=AND(ISNUMBER(' + qty + '),' + qty + '<=0)')
-      .setBackground(COLORS.outRow)
+  const formulas = stockRuleFormulas_(cols, first);
+  const colors = [COLORS.outRow, COLORS.lowRow];
+  const rules = formulas.map(function (formula, i) {
+    return SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=' + formula)
+      .setBackground(colors[i])
       .setRanges([range])
-      .build(),
-  ];
-  if (cols.minQty) {
-    const min = '$' + columnLetter_(cols.minQty) + first;
-    rules.push(SpreadsheetApp.newConditionalFormatRule()
-      .whenFormulaSatisfied('=AND(ISNUMBER(' + qty + '),ISNUMBER(' + min + '),' + qty + '<=' + min + ')')
-      .setBackground(COLORS.lowRow)
-      .setRanges([range])
-      .build());
-  }
+      .build();
+  });
   const others = sheet.getConditionalFormatRules().filter(function (rule) { return !isStockRule_(rule); });
   sheet.setConditionalFormatRules(rules.concat(others));
+}
+
+/** The out-of-stock rule, then the low-stock rule (when there's a Min Qty column). */
+function stockRuleFormulas_(cols, firstRow) {
+  const qty = '$' + columnLetter_(cols.quantity) + firstRow;
+  const out = ['AND(ISNUMBER(' + qty + '),' + qty + '<=0)'];
+  if (cols.minQty) {
+    const min = '$' + columnLetter_(cols.minQty) + firstRow;
+    out.push('AND(ISNUMBER(' + qty + '),ISNUMBER(' + min + '),' + qty + '<=' + min + ')');
+  }
+  return out;
 }
 
 function isStockRule_(rule) {
@@ -1749,70 +1039,129 @@ function isStockRule_(rule) {
   return /^=AND\(ISNUMBER\(\$[A-Z]+\d+\),/.test(String((values && values[0]) || ''));
 }
 
-function createSettingsSheet_(ss) {
-  const sheet = ss.insertSheet(SHEET_NAMES.settings);
-  sheet.getRange(1, 1, 1, 3).setValues([['Setting', 'Value', 'What it does']])
-    .setFontWeight('bold').setFontColor('#ffffff').setBackground(COLORS.header);
-  sheet.setFrozenRows(1);
-  sheet.setColumnWidth(1, 250);
-  sheet.setColumnWidth(2, 280);
-  sheet.setColumnWidth(3, 560);
-  sheet.setTabColor('#6b7280');
-  SETTINGS.forEach(function (def) {
-    const row = appendSettingRow_(sheet, def);
-    sheet.getRange(row, 2).setValue(settingCellValue_(def, defaultSettingValue_(def)));
-  });
-  return sheet;
+/**
+ * The Reorder tab: a FILTER formula that lists the low parts that aren't
+ * ticked as Ordered. Returns 'created', 'updated', or 'skipped' when a tab of
+ * yours already uses the name.
+ */
+function setupReorderSheet_(ss, inv) {
+  const keys = REORDER_KEYS.filter(function (key) { return inv.cols[key]; });
+  let sheet = ss.getSheetByName(SHEET_NAMES.reorder);
+  if (sheet && !isReorderSheet_(sheet)) return 'skipped';
+  const created = !sheet;
+  if (!sheet) sheet = ss.insertSheet(SHEET_NAMES.reorder, inv.sheet.getIndex());
+  if (!isEmptySheet_(sheet)) {
+    sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).clearContent();
+  }
+  const headerValues = inv.values[inv.headerRow - 1] || [];
+  const headers = keys.map(function (key) { return cellText_(headerValues[inv.cols[key] - 1]) || FIELD_BY_KEY[key].header; });
+  ensureRows_(sheet, 3);
+  sheet.getRange(1, 1).setValue(REORDER_TITLE).setFontWeight('bold');
+  sheet.getRange(2, 1, 1, headers.length).setValues([headers.map(safeCell_)]);
+  styleHeaders_(sheet, 2, 1, keys.map(function (key) { return FIELD_BY_KEY[key]; }), false);
+  sheet.getRange(3, 1).setFormula(reorderFormula_(inv.cols, keys));
+  sheet.setFrozenRows(2);
+  sheet.setTabColor(COLORS.reorderTab);
+  return created ? 'created' : 'updated';
 }
 
-function createLogSheet_(ss) {
-  const sheet = ss.insertSheet(SHEET_NAMES.log);
-  sheet.getRange(1, 1, 1, LOG_HEADERS.length).setValues([LOG_HEADERS])
-    .setFontWeight('bold').setFontColor('#ffffff').setBackground(COLORS.header);
-  sheet.setFrozenRows(1);
-  [150, 80, 240, 130, 70, 80, 200, 320].forEach(function (width, i) { sheet.setColumnWidth(i + 1, width); });
-  sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, 1), 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
-  sheet.setTabColor('#9ca3af');
-  return sheet;
-}
-
-// ---------------------------------------------------------------------------
-// Access, users and locking
-// ---------------------------------------------------------------------------
-
-function getSpreadsheet_() {
-  const props = PropertiesService.getScriptProperties();
-  let ss = null;
-  try {
-    ss = SpreadsheetApp.getActiveSpreadsheet();
-  } catch (err) {
-    ss = null;
-  }
-  if (ss) {
-    if (props.getProperty(PROP.spreadsheetId) !== ss.getId()) props.setProperty(PROP.spreadsheetId, ss.getId());
-    return ss;
-  }
-  const id = props.getProperty(PROP.spreadsheetId);
-  if (id) return SpreadsheetApp.openById(id);
-  throw new Error('Couldn\'t find the spreadsheet. Open it and choose Inventory > Set up / repair.');
+/** An empty tab, or one this script made. */
+function isReorderSheet_(sheet) {
+  if (isEmptySheet_(sheet)) return true;
+  if (cellText_(sheet.getRange(1, 1).getValue()) === REORDER_TITLE) return true;
+  return /FILTER\(/i.test(sheet.getRange(3, 1).getFormula()) && sheet.getRange(3, 1).getFormula().indexOf(SHEET_NAMES.inventory) !== -1;
 }
 
 /**
- * email:   who is using the app, when Google shares it (blank for people
- *          outside your Google Workspace domain)
- * owner:   the account the script runs as, which sends the emails
- * isOwner: true for that account, and for anyone using the spreadsheet menu
- *          or sidebar (those run under their own account)
+ * =IFNA(SORT(FILTER(...)), "Nothing needs reordering right now."), most urgent
+ * first. Whole-column ranges (A:A) keep it working as rows are added, and
+ * also survive Google's .xlsx import, which rejects ranges like A2:A.
  */
-function currentUser_() {
-  let email = '';
-  try {
-    email = Session.getActiveUser().getEmail() || '';
-  } catch (err) {
-    email = '';
+function reorderFormula_(cols, keys) {
+  const tab = SHEET_NAMES.inventory;
+  const column = function (key) {
+    const letter = columnLetter_(cols[key]);
+    return tab + '!' + letter + ':' + letter;
+  };
+  const numbers = keys.map(function (key) { return cols[key]; });
+  const contiguous = numbers.every(function (n, i) { return i === 0 || n === numbers[i - 1] + 1; });
+  const data = contiguous
+    ? tab + '!' + columnLetter_(numbers[0]) + ':' + columnLetter_(numbers[numbers.length - 1])
+    : '{' + keys.map(column).join(',') + '}';
+  const named = ['name', 'partNumber'].filter(function (key) { return cols[key]; })
+    .map(function (key) { return column(key) + '<>""'; });
+  const conditions = [
+    named.length > 1 ? '((' + named.join(')+(') + '))>0' : named[0],
+    'ISNUMBER(' + column('quantity') + ')',
+    'ISNUMBER(' + column('minQty') + ')',
+    column('quantity') + '<=' + column('minQty'),
+  ];
+  if (cols.ordered) conditions.push(column('ordered') + '<>TRUE', column('ordered') + '<>"Yes"');
+  const list = 'SORT(FILTER(' + data + ',' + conditions.join(',') + '),' + (keys.indexOf('quantity') + 1) + ',TRUE)';
+  return '=IFNA(' + list + ',"' + NOTHING_TO_REORDER + '")';
+}
+
+function setupSettingsSheet_(ss, report) {
+  let sheet = ss.getSheetByName(SHEET_NAMES.settings);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAMES.settings);
+    sheet.getRange(1, 1, 1, 3).setValues([['Setting', 'Value', 'What it does']])
+      .setFontWeight('bold').setFontColor('#ffffff').setBackground(COLORS.header);
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidth(1, 270);
+    sheet.setColumnWidth(2, 280);
+    sheet.setColumnWidth(3, 560);
+    sheet.setTabColor(COLORS.settingsTab);
+    report.created.push(SHEET_NAMES.settings);
   }
-  const owner = effectiveEmail_();
-  return { email: email, owner: owner, isOwner: !!email && !!owner && email.toLowerCase() === owner.toLowerCase() };
+  const found = readSettingsRows_(sheet);
+  SETTINGS.forEach(function (def) {
+    if (found[def.key]) return;
+    const row = appendSettingRow_(sheet, def);
+    if (def.type !== 'emails') sheet.getRange(row, 2).setValue(settingCellValue_(def, def.default));
+  });
+  if (!getSettings_(ss).recipients.length && effectiveEmail_()) {
+    writeSettings_(ss, { recipients: [effectiveEmail_()] });
+  }
+}
+
+function setupSummary_(report) {
+  const lines = [];
+  if (report.emailError) {
+    lines.push('The tabs are ready and the automatic checks are on, but the test email couldn\'t be sent: ' +
+      report.emailError.replace(/\.$/, '') + '. Fix the "Send emails to" row in the Settings tab, then choose ' +
+      'Inventory > Send a test email.');
+  } else if (report.triggers.installed) {
+    lines.push('Done. The low-stock emails are on, and a test email went to ' + report.testEmailTo.join(', ') + '.');
+  } else {
+    lines.push('Done. A test email went to ' + report.testEmailTo.join(', ') + '. The automatic emails are still sent from ' +
+      report.triggers.owner + '\'s account.');
+  }
+  if (report.addedColumns.length) {
+    lines.push('Added these columns to the Inventory tab: ' + report.addedColumns.join(', ') + '.');
+  }
+  if (report.reorder === 'skipped') {
+    lines.push('You already have a tab named "' + SHEET_NAMES.reorder + '", so it was left alone and the reorder list wasn\'t added.');
+  }
+  lines.push('List your parts in the Inventory tab. Give each part a Min Qty to get emails about it.');
+  if (!getUi_()) lines.push('You can close this tab and go back to the spreadsheet.');
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Spreadsheet, people and locking
+// ---------------------------------------------------------------------------
+
+function getSpreadsheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    throw new Error('This code has to be added from inside the spreadsheet: open it and choose Extensions > Apps Script.');
+  }
+  return ss;
+}
+
+function appName_(ss) {
+  return ss.getName() || 'Parts Inventory';
 }
 
 function effectiveEmail_() {
@@ -1821,41 +1170,6 @@ function effectiveEmail_() {
   } catch (err) {
     return '';
   }
-}
-
-function needsAccessCode_(settings) {
-  return !!settings.accessCode && !currentUser_().isOwner;
-}
-
-function checkAccess_(ctx, settings) {
-  const user = currentUser_();
-  if (!settings.accessCode || user.isOwner) return user;
-  const cache = CacheService.getScriptCache();
-  const failures = Number(cache.get('ACCESS_FAILURES')) || 0;
-  if (failures >= MAX_ACCESS_FAILURES) {
-    throw new Error('ACCESS_LOCKED: Too many wrong access codes were tried. Wait 10 minutes and try again.');
-  }
-  const code = String((ctx && ctx.code) || '').trim();
-  if (code && safeEqual_(code, settings.accessCode)) return user;
-  if (code) cache.put('ACCESS_FAILURES', String(failures + 1), 600);
-  throw new Error('ACCESS_DENIED: ' + (code ? 'That access code isn\'t right.' : 'Enter the access code to open this app.'));
-}
-
-function requireOwner_(user) {
-  if (!user.isOwner) {
-    throw new Error('Only ' + (user.owner || 'the person who set up the app') + ' can change this.');
-  }
-}
-
-/** Menu and setup functions are public, so make sure they aren't being called through the web app. */
-function requireSheetUser_() {
-  if (!currentUser_().isOwner) throw new Error('This can only be run from the spreadsheet.');
-}
-
-function actorName_(ctx, user) {
-  if (user.email) return user.email;
-  const name = cleanString_(ctx && ctx.actor, false).slice(0, 60);
-  return name || 'Web app user';
 }
 
 function withLock_(fn) {
@@ -1867,41 +1181,6 @@ function withLock_(fn) {
     return result;
   } finally {
     lock.releaseLock();
-  }
-}
-
-/** Saves the web app's /exec link the first time the app is opened, for use in emails. */
-function rememberAppUrl_(ss, settings) {
-  const url = currentServiceUrl_();
-  if (!url || !/\/exec$/.test(url) || settings.appUrl === url) return false;
-  if (settings.appUrl && !/^https:\/\/script\.google\.com\//.test(settings.appUrl)) return false;
-  try {
-    writeSettings_(ss, { appUrl: url });
-    return true;
-  } catch (err) {
-    return false;
-  }
-}
-
-function currentServiceUrl_() {
-  try {
-    return ScriptApp.getService().getUrl() || '';
-  } catch (err) {
-    return '';
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Spreadsheet dialogs
-// ---------------------------------------------------------------------------
-
-function runMenu_(fn) {
-  requireSheetUser_();
-  const ss = getSpreadsheet_();
-  try {
-    fn(ss);
-  } catch (err) {
-    alert_('Parts Inventory', errorMessage_(err));
   }
 }
 
@@ -1919,105 +1198,31 @@ function alert_(title, message) {
   else console.log(title + ': ' + message);
 }
 
-function showDialog_(bodyHtml, title, width, height) {
-  const html = '<div style="font:14px/1.5 Arial,Helvetica,sans-serif;color:#1f2937;">' + bodyHtml + '</div>';
-  SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(html).setWidth(width).setHeight(height), title);
-}
-
-function openLinkHtml_(url) {
-  return '<p><a href="' + escapeHtml_(url) + '" target="_blank" rel="noopener" ' +
-    'onclick="google.script.host.close()" style="font-size:16px;font-weight:bold;color:' + COLORS.accent +
-    ';">Open the inventory app &rarr;</a></p>' +
-    '<p style="color:#6b7280;">Tip: bookmark it, or add it to your phone\'s home screen.</p>' +
-    '<script>var w = window.open(' + jsonForHtml_(url) + ', "_blank"); if (w) google.script.host.close();</script>';
-}
-
-function deployStepsHtml_() {
-  return '<ol style="padding-left:20px;">' +
-    '<li>Click <b>Extensions &gt; Apps Script</b>.</li>' +
-    '<li>Click <b>Deploy &gt; New deployment</b>. Next to "Select type", click the gear and choose <b>Web app</b>.</li>' +
-    '<li>Set <b>Execute as</b> to <b>Me</b>.</li>' +
-    '<li>Set <b>Who has access</b>: <i>Anyone within your company</i> if you use Google Workspace; ' +
-    'otherwise <i>Anyone with a Google account</i>, or <i>Anyone</i> for coworkers without Google accounts ' +
-    '(then set an <b>App access code</b> in the Settings tab).</li>' +
-    '<li>Click <b>Deploy</b>, allow access when Google asks, then copy the <b>Web app URL</b> and open it.</li>' +
-    '</ol>' +
-    '<p>The link is saved automatically the first time you open it, so emails can link back to the app.</p>';
-}
-
-function deployHelpHtml_() {
-  return '<p>To use the app on a phone or computer, publish it as a web app once:</p>' + deployStepsHtml_() +
-    '<p>You can also use <b>Inventory &gt; Open in sidebar</b> right here in the spreadsheet.</p>';
-}
-
-function setupDoneHtml_(ss, report) {
-  const settings = getSettings_(ss);
-  const items = [];
-  if (report.created.length) items.push('Created the ' + listText_(report.created) + ' tab' + (report.created.length > 1 ? 's' : '') + '.');
-  if (report.addedColumns.length) items.push('Added the ' + listText_(report.addedColumns) + ' column' + (report.addedColumns.length > 1 ? 's' : '') + ' to the Inventory tab.');
-  if (report.addedSettings.length) items.push('Added ' + listText_(report.addedSettings) + ' to the Settings tab.');
-  if (!items.length) items.push('Everything was already in place.');
-  if (report.missingOptional.length) {
-    items.push('Optional columns you can add to the Inventory tab if you want them: ' + listText_(report.missingOptional) + '.');
-  }
-  items.push(report.triggers && report.triggers.installed
-    ? 'Automatic alerts are on: the stock is checked whenever the Inventory tab is edited, and every hour.'
-    : 'Automatic alerts were not changed; they run under ' + escapeHtml_((report.triggers && report.triggers.owner) || 'another account') + '.');
-  items.push(settings.recipients.length
-    ? 'Low-stock emails go to ' + escapeHtml_(settings.recipients.join(', ')) + '. Change that in the Settings tab.'
-    : 'Add who should get low-stock emails in the Settings tab.');
-  return '<ul style="padding-left:20px;">' + items.map(function (item) { return '<li>' + item + '</li>'; }).join('') + '</ul>' +
-    '<p><b>Next:</b> add parts in the Inventory tab, or publish the app for your phone and computer:</p>' + deployStepsHtml_();
-}
-
-function helpHtml_(ss) {
-  const url = getSettings_(ss).appUrl;
-  return '<p><b>Inventory tab</b>: one row per part. Set <b>Min Qty</b> to get an email when the quantity drops to that ' +
-    'number or below, and put the page to reorder from in <b>Order Link</b>. Grey columns are filled in by the app.</p>' +
-    '<p><b>Settings tab</b>: who gets the emails, the reminder schedule and the app name.</p>' +
-    '<p><b>Activity Log tab</b>: every change made through the app, and the emails sent.</p>' +
-    (url
-      ? '<p><b>Web app</b>: <a href="' + escapeHtml_(url) + '" target="_blank" rel="noopener">' + escapeHtml_(url) + '</a></p>'
-      : '<p><b>Web app</b>: not published yet.</p>' + deployStepsHtml_()) +
-    '<p><b>Changed the code?</b> In Apps Script, use Deploy &gt; Manage deployments, edit the web app and pick ' +
-    '"New version", so the web app picks up the change.</p>' +
-    '<p style="color:#6b7280;">Parts Inventory ' + APP_VERSION + '</p>';
-}
-
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
 
 function displayName_(p) {
-  return p.name || p.partNumber || p.id || 'Unnamed part';
+  return p.name || p.partNumber || 'Unnamed part';
 }
 
 function isDate_(value) {
   return Object.prototype.toString.call(value) === '[object Date]';
 }
 
+/** A date, a ticked box or text like "yes" counts as set; blank, unticked or "no" doesn't. */
 function isMarked_(value) {
   if (value === true) return true;
   if (isDate_(value)) return !isNaN(value.getTime());
   if (typeof value === 'number') return value > 0;
-  if (typeof value === 'string') return !!value.trim() && !/^(no|n|false|0|none|-)$/i.test(value.trim());
+  if (typeof value === 'string') return !!value.trim() && !NO_TEXT.test(value.trim()) && value.trim() !== '0';
   return false;
-}
-
-function isBlank_(value) {
-  return value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
 }
 
 function cellText_(value) {
   if (value === null || value === undefined) return '';
   if (isDate_(value)) return isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
   return String(value).trim();
-}
-
-function cleanString_(value, multiline) {
-  let s = String(value == null ? '' : value);
-  s = multiline ? s.replace(/\r\n?/g, '\n') : s.replace(/[\r\n\t]+/g, ' ');
-  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim();
 }
 
 function toNumberOrNull_(value) {
@@ -2031,29 +1236,9 @@ function toNumberOrNull_(value) {
   return isFinite(n) ? n : null;
 }
 
-function toDateOrNull_(value) {
-  if (isDate_(value)) return isNaN(value.getTime()) ? null : value;
-  if (typeof value === 'string' && value.trim()) {
-    const t = Date.parse(value.trim());
-    return isNaN(t) ? null : new Date(t);
-  }
-  return null;
-}
-
-function toBoolean_(value) {
-  return value === true || /^(true|yes|y|on|1)$/i.test(String(value).trim());
-}
-
 function round_(n, decimals) {
   const f = Math.pow(10, decimals);
   return Math.round(n * f) / f;
-}
-
-function sameValue_(a, b) {
-  const blankA = a === null || a === undefined || a === '';
-  const blankB = b === null || b === undefined || b === '';
-  if (blankA || blankB) return blankA === blankB;
-  return typeof a === 'number' || typeof b === 'number' ? Number(a) === Number(b) : String(a) === String(b);
 }
 
 function formatNumber_(n) {
@@ -2070,11 +1255,6 @@ function formatQty_(n, unit) {
 
 function countLabel_(n, singular, plural) {
   return n + ' ' + (n === 1 ? singular : plural);
-}
-
-function listText_(items) {
-  if (items.length < 2) return items.join('');
-  return items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
 }
 
 function truncate_(text, max) {
@@ -2097,6 +1277,16 @@ function columnLetter_(n) {
   return s;
 }
 
+/**
+ * Sheets reads text the way it reads typing: "00123" becomes 123, "3-4" becomes
+ * a date and "=..." becomes a formula. A leading apostrophe keeps it as text
+ * (the apostrophe itself isn't stored).
+ */
+function safeCell_(value) {
+  if (typeof value !== 'string' || value === '') return value;
+  return /^[=+\-@'#]/.test(value) || /\d/.test(value) || /^(true|false)$/i.test(value) ? "'" + value : value;
+}
+
 function parseLinks_(text) {
   return String(text || '').split(/\s+/).map(normalizeUrl_).filter(String);
 }
@@ -2117,10 +1307,6 @@ function normalizeUrl_(text) {
 
 function hostOf_(url) {
   return String(url).replace(/^https?:\/\//i, '').split(/[/?#:]/)[0].replace(/^www\./i, '');
-}
-
-function partUrl_(appUrl, id) {
-  return appUrl + (appUrl.indexOf('?') === -1 ? '?' : '&') + 'part=' + encodeURIComponent(id);
 }
 
 function linkHtml_(url, text) {
@@ -2147,16 +1333,6 @@ function uniqueEmails_(list) {
   });
 }
 
-function safeEqual_(a, b) {
-  const x = String(a);
-  const y = String(b);
-  let diff = x.length ^ y.length;
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    diff |= (x.charCodeAt(i) || 0) ^ (y.charCodeAt(i) || 0);
-  }
-  return diff === 0;
-}
-
 function escapeHtml_(text) {
   return String(text == null ? '' : text)
     .replace(/&/g, '&amp;')
@@ -2164,40 +1340,6 @@ function escapeHtml_(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-/** JSON that is safe to drop inside a <script> tag. */
-function jsonForHtml_(value) {
-  return JSON.stringify(value)
-    .replace(/</g, '\\u003c')
-    .replace(/>/g, '\\u003e')
-    .replace(/&/g, '\\u0026')
-    .replace(/\u2028/g, '\\u2028')
-    .replace(/\u2029/g, '\\u2029');
-}
-
-/** google.script.run can't return Date objects, so turn them into ISO strings. */
-function jsonSafe_(value) {
-  if (isDate_(value)) return isNaN(value.getTime()) ? null : value.toISOString();
-  if (Array.isArray(value)) return value.map(jsonSafe_);
-  if (value && typeof value === 'object') {
-    const out = {};
-    Object.keys(value).forEach(function (key) {
-      const v = value[key];
-      if (v !== undefined && typeof v !== 'function') out[key] = jsonSafe_(v);
-    });
-    return out;
-  }
-  return value;
-}
-
-function parseJson_(text) {
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch (err) {
-    return null;
-  }
 }
 
 function errorMessage_(err) {

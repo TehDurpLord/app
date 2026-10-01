@@ -1,5 +1,4 @@
 node_modules/
-dist/
 .clasp.json
 .clasprc.json
 *.log

@@ -2,7 +2,7 @@
 /**
  * A small in-memory stand-in for the Google Apps Script services that
  * src/Code.js uses (SpreadsheetApp, MailApp, ScriptApp, ...), so the real
- * server code can run under Node for tests and the local preview.
+ * script can run under Node for the tests.
  *
  * It is deliberately strict: range sizes are checked, unknown methods don't
  * exist, and text written to a cell is parsed the way Google Sheets parses
@@ -157,6 +157,7 @@ class FakeSheet {
   }
   getParent() { return this.ss; }
   getSheetId() { return this.id; }
+  getIndex() { return this.ss.sheets.indexOf(this) + 1; }
   getMaxRows() { return this.maxRows; }
   getMaxColumns() { return this.maxCols; }
 
@@ -297,6 +298,16 @@ class FakeRange {
   }
   getValue() { return cellValue(this.sheet.cell(this.row, this.col)); }
   getDisplayValues() { return this.getValues().map((row) => row.map((v) => (v instanceof Date ? v.toISOString() : String(v)))); }
+  getFormula() {
+    const cell = this.sheet.cell(this.row, this.col);
+    return cell && cell.f ? cell.f : '';
+  }
+  setFormula(formula) {
+    if (typeof formula !== 'string' || formula[0] !== '=') throw new Error('setFormula needs a formula that starts with =');
+    this.eachCell((r, c) => this.sheet.setCell(r, c, { f: formula }));
+    return this;
+  }
+  getNote() { return this.sheet.meta['setNote:' + this.row + ':' + this.col] || ''; }
   getFormulas() {
     const out = [];
     this.eachCell((r, c, i, j) => {
@@ -370,9 +381,10 @@ class FakeRange {
   }
   setDataValidation(rule) {
     if (!rule || typeof rule !== 'object') throw new Error('setDataValidation expects a built rule');
-    this.sheet.meta['validation:' + this.row + ':' + this.col] = rule;
+    this.eachCell((r, c) => { this.sheet.meta['validation:' + r + ':' + c] = rule; });
     return this;
   }
+  getDataValidation() { return this.sheet.meta['validation:' + this.row + ':' + this.col] || null; }
   getA1Notation() { return 'R' + this.row + 'C' + this.col + ':R' + this.getLastRow() + 'C' + this.getLastColumn(); }
 }
 FORMAT_METHODS.forEach((name) => {
@@ -436,28 +448,22 @@ function formatDate(date, timeZone, pattern) {
 }
 
 /**
- * The fake Google services, without Code.js loaded. Works in Node and in a
- * browser (see dev/build-demo.js).
- * opts: { owner, active, timeZone, ui, now, serviceUrl, spreadsheetName, quota, readHtml }
+ * The fake Google services, without Code.js loaded.
+ * opts: { owner, timeZone, ui, now, spreadsheetName, quota }
  */
 function createEnvironment(opts = {}) {
   const env = {
     owner: opts.owner === undefined ? 'owner@example.com' : opts.owner,
-    active: opts.active === undefined ? (opts.owner === undefined ? 'owner@example.com' : opts.owner) : opts.active,
     uiAvailable: !!opts.ui,
     now: opts.now ? new Date(opts.now).getTime() : null,
-    serviceUrl: opts.serviceUrl || null,
     quota: opts.quota === undefined ? 100 : opts.quota,
     mailFails: null,
     sent: [],
     alerts: [],
     alertAnswers: [],
-    dialogs: [],
-    sidebars: [],
     menus: [],
     triggers: [],
     props: {},
-    cache: {},
     logs: [],
     lockHeld: false,
   };
@@ -491,59 +497,7 @@ function createEnvironment(opts = {}) {
       env.alerts.push({ title, prompt, buttons });
       return env.alertAnswers.length ? env.alertAnswers.shift() : Button.OK;
     },
-    showSidebar(output) { env.sidebars.push(output); },
-    showModalDialog(output, title) { env.dialogs.push({ title, html: output.getContent() }); },
-    showModelessDialog(output, title) { env.dialogs.push({ title, html: output.getContent() }); },
   };
-
-  class HtmlOutput {
-    constructor(content) { this.content = content; this.title = ''; this.meta = []; }
-    getContent() { return this.content; }
-    setTitle(title) { this.title = title; return this; }
-    getTitle() { return this.title; }
-    addMetaTag(name, content) {
-      if (name !== 'viewport' && !/^(apple-mobile-web-app-capable|mobile-web-app-capable)$/.test(name)) {
-        throw new Error('Meta tag ' + name + ' is not allowed');
-      }
-      this.meta.push({ name, content });
-      return this;
-    }
-    setWidth(w) { this.width = w; return this; }
-    setHeight(h) { this.height = h; return this; }
-    setXFrameOptionsMode(mode) { this.xFrame = mode; return this; }
-    setFaviconUrl(url) { this.favicon = url; return this; }
-  }
-
-  const readHtml = opts.readHtml || ((name) => fs.readFileSync(path.join(SRC_DIR, name + '.html'), 'utf8'));
-
-  const HtmlService = {
-    XFrameOptionsMode: { ALLOWALL: 'ALLOWALL', DEFAULT: 'DEFAULT' },
-    SandboxMode: { IFRAME: 'IFRAME' },
-    createHtmlOutput(html) { return new HtmlOutput(String(html)); },
-    createHtmlOutputFromFile(name) { return new HtmlOutput(readHtml(name)); },
-    createTemplateFromFile(name) { return makeTemplate(readHtml(name), name + '.html'); },
-    createTemplate(html) {
-      if (typeof html !== 'string') throw new Error('createTemplate expects a string');
-      return makeTemplate(html, 'the template');
-    },
-  };
-
-  function makeTemplate(source, label) {
-    const template = {
-      evaluate() {
-        // Only <?!= name ?> is used by the app. Anything else starting with
-        // "<?" would be read by Apps Script as template code, so fail loudly.
-        const out = source.replace(/<\?([\s\S]*?)\?>/g, (whole, inner) => {
-          const m = /^!=\s*([A-Za-z_$][\w$]*)\s*$/.exec(inner);
-          if (!m) throw new Error('Unexpected template tag in ' + label + ': ' + whole.slice(0, 40));
-          if (!(m[1] in template)) throw new Error('Template variable ' + m[1] + ' was not set');
-          return String(template[m[1]]);
-        });
-        return new HtmlOutput(out);
-      },
-    };
-    return template;
-  }
 
   const makeTriggerBuilder = (fn) => {
     const trigger = { fn, id: 'trigger-' + (env.triggers.length + 1) + '-' + Math.random().toString(36).slice(2, 7) };
@@ -591,11 +545,6 @@ function createEnvironment(opts = {}) {
       WrapStrategy: { CLIP: 'CLIP', WRAP: 'WRAP', OVERFLOW: 'OVERFLOW' },
       BooleanCriteria: { CUSTOM_FORMULA: 'CUSTOM_FORMULA' },
       getActiveSpreadsheet: () => ss,
-      getActive: () => ss,
-      openById: (id) => {
-        if (id !== ss.id) throw new Error('Unexpected spreadsheet id ' + id);
-        return ss;
-      },
       getUi: () => {
         if (!env.uiAvailable) throw new Error('Exception: Cannot call SpreadsheetApp.getUi() from this context.');
         return ui;
@@ -604,7 +553,6 @@ function createEnvironment(opts = {}) {
       newConditionalFormatRule: () => new ConditionalFormatRuleBuilder(),
       newDataValidation: () => new DataValidationBuilder(),
     },
-    HtmlService,
     MailApp: {
       sendEmail(options) {
         if (typeof options !== 'object' || !options) throw new Error('This app always calls sendEmail with an options object');
@@ -632,17 +580,6 @@ function createEnvironment(opts = {}) {
         getProperties: () => Object.assign({}, env.props),
       }),
     },
-    CacheService: {
-      getScriptCache: () => ({
-        get: (k) => (k in env.cache ? env.cache[k] : null),
-        put: (k, v, ttl) => {
-          if (typeof v !== 'string') throw new Error('Cache values must be strings');
-          if (ttl !== undefined && ttl > 21600) throw new Error('Cache TTL is 6 hours at most');
-          env.cache[k] = v;
-        },
-        remove: (k) => { delete env.cache[k]; },
-      }),
-    },
     LockService: {
       getScriptLock: () => ({
         tryLock() {
@@ -656,7 +593,6 @@ function createEnvironment(opts = {}) {
       }),
     },
     Session: {
-      getActiveUser: () => ({ getEmail: () => env.active || '' }),
       getEffectiveUser: () => ({ getEmail: () => env.owner || '' }),
       getScriptTimeZone: () => 'America/New_York',
     },
@@ -676,7 +612,6 @@ function createEnvironment(opts = {}) {
         if (i === -1) throw new Error('No such trigger');
         env.triggers.splice(i, 1);
       },
-      getService: () => ({ getUrl: () => env.serviceUrl }),
     },
     Utilities: {
       formatDate,
@@ -694,24 +629,20 @@ function makeApp(environment, lookup, extras) {
   const app = Object.assign({
     env,
     ss,
-    /** The event object a trigger of this script would pass (with its real triggerUid). */
-    triggerEvent(fn) {
-      const t = env.triggers.find((x) => x.fn === fn);
-      if (!t) throw new Error('No trigger for ' + fn);
-      return { triggerUid: t.id, authMode: 'FULL' };
-    },
-    /** Calls a function from Code.js the way google.script.run would: arguments and result go through JSON. */
+    /**
+     * Runs one of the public functions (the ones the Run button, the menu or a
+     * trigger can call). The result comes back as plain JSON data, because
+     * objects made inside the sandbox fail strict equality checks.
+     */
     run(name, ...args) {
       const fn = lookup(name);
       if (typeof fn !== 'function') throw new Error('No function ' + name + ' in Code.js');
-      if (/_$/.test(name)) throw new Error(name + ' is private and cannot be called by google.script.run');
-      const result = fn(...JSON.parse(JSON.stringify(args)));
-      assertJsonSafe(result, name);
+      if (/_$/.test(name)) throw new Error(name + ' is private: Apps Script hides functions ending in _');
+      const result = fn(...args);
       return result === undefined ? undefined : JSON.parse(JSON.stringify(result));
     },
     sheet(name) { return ss.getSheetByName(name); },
     setTime(iso) { env.now = new RealDate(iso).getTime(); },
-    as(active) { env.active = active; return app; },
   }, extras);
   return app;
 }
@@ -722,7 +653,6 @@ function makeApp(environment, lookup, extras) {
  */
 function createApp(opts = {}) {
   const environment = createEnvironment(opts);
-  const injected = Object.assign({}, environment.globals);
   const context = vm.createContext(environment.globals);
   const file = opts.codeFile || path.join(SRC_DIR, 'Code.js');
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: path.basename(file) });
@@ -732,22 +662,7 @@ function createApp(opts = {}) {
     eval(expression) { return vm.runInContext(expression, context); },
     /** Like eval, but returns plain JSON data (objects made inside the sandbox fail strict equality). */
     value(expression) { return JSON.parse(JSON.stringify(vm.runInContext(expression, context))); },
-    /** Names of the functions Code.js defines at the top level (google.script.run can call the public ones). */
-    functionNames() {
-      return Object.keys(context).filter((k) => typeof context[k] === 'function' && !(k in injected));
-    },
   });
-}
-
-/** google.script.run can't send Dates or functions back to the page; fail tests that try. */
-function assertJsonSafe(value, where, trail = 'result') {
-  if (value instanceof Date || Object.prototype.toString.call(value) === '[object Date]') {
-    throw new Error(where + ' returned a Date at ' + trail + ' (google.script.run would deliver null)');
-  }
-  if (typeof value === 'function') throw new Error(where + ' returned a function at ' + trail);
-  if (value && typeof value === 'object') {
-    Object.keys(value).forEach((k) => assertJsonSafe(value[k], where, trail + '.' + k));
-  }
 }
 
 module.exports = { createApp, createEnvironment, makeApp, FakeSpreadsheet, FakeSheet, formatDate, userEntered };

@@ -2,378 +2,269 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createApp } = require('./gas-fakes');
+const { sheetSpec, isUpToDate, OUT } = require('../dev/build-sheet');
+const { unzip } = require('../dev/xlsx');
 
 const OWNER = 'owner@example.com';
-const ctx = { code: '', actor: 'Sam' };
+const LAYOUT = ['Part Name', 'Part Number', 'Location', 'Quantity', 'Min Qty', 'Order Link', 'Ordered', 'Notes', 'Alert Sent'];
+const REORDER_FORMULA = '=IFNA(SORT(FILTER(Inventory!A:F,((Inventory!A:A<>"")+(Inventory!B:B<>""))>0,' +
+  'ISNUMBER(Inventory!D:D),ISNUMBER(Inventory!E:E),Inventory!D:D<=Inventory!E:E,Inventory!G:G<>TRUE,' +
+  'Inventory!G:G<>"Yes"),4,TRUE),"Nothing needs reordering right now.")';
 
 /**
- * A spreadsheet that has been through setup and whose web app has been opened
- * once (so the app link is known). The clock is set to 6 AM on a Monday in New
- * York, before the 8 AM reminder, so only the reminder tests get reminders.
+ * A spreadsheet that has been through setup, with the setup email cleared.
+ * The clock is 6 AM on a Monday in New York, before the 8 AM reminder, so
+ * only the reminder tests get reminders.
  */
 function freshApp(opts) {
-  const app = createApp(Object.assign({
-    serviceUrl: 'https://script.google.com/macros/s/abc123/exec',
-    now: '2026-09-28T10:00:00Z',
-  }, opts));
+  const app = createApp(Object.assign({ now: '2026-09-28T10:00:00Z' }, opts));
   app.run('setup');
-  app.context.doGet({ parameter: {} });
+  app.env.sent.length = 0;
   return app;
 }
 
-function addPart(app, fields) {
-  return app.run('apiSavePart', ctx, Object.assign({ name: 'Widget', quantity: 10, minQty: 5 }, fields)).part;
+function inventory(app) {
+  return app.sheet('Inventory');
 }
 
-function adjust(app, id, mode, amount, note) {
-  return app.run('apiAdjustStock', ctx, { id, mode, amount, note });
+function col(app, header) {
+  const i = inventory(app).dump()[0].indexOf(header);
+  if (i === -1) throw new Error('No column ' + header);
+  return i + 1;
 }
 
-function logRows(app) {
-  return app.sheet('Activity Log').dump().slice(1);
+/** What Sheets does when someone edits cells by hand: the change, then the edit trigger. */
+function edit(app, range, oldValue) {
+  app.context.onInventoryEdit({ range, oldValue, user: { getEmail: () => '' } });
 }
 
-function settingValue(app, label) {
-  const row = app.sheet('Settings').dump().find((r) => r[0] === label);
-  return row ? row[1] : undefined;
+/** Types a new row into the Inventory tab. values: { header: value } */
+function addPart(app, values) {
+  const sheet = inventory(app);
+  const headers = sheet.dump()[0];
+  const row = sheet.getLastRow() + 1;
+  const range = sheet.getRange(row, 1, 1, headers.length);
+  range.setValues([headers.map((h) => (h in values ? values[h] : ''))]);
+  edit(app, range);
+  return row;
 }
+
+function setCell(app, row, header, value) {
+  const range = inventory(app).getRange(row, col(app, header));
+  const old = range.getValue();
+  range.setValue(value);
+  edit(app, range, old);
+}
+
+function cell(app, row, header) {
+  return inventory(app).getRange(row, col(app, header)).getValue();
+}
+
+function settingRow(app, label) {
+  const rows = app.sheet('Settings').dump();
+  const i = rows.findIndex((r) => r[0] === label);
+  if (i === -1) throw new Error('No setting ' + label);
+  return i + 1;
+}
+
+function setting(app, label) {
+  return app.sheet('Settings').dump()[settingRow(app, label) - 1][1];
+}
+
+function changeSetting(app, label, value) {
+  app.sheet('Settings').getRange(settingRow(app, label), 2).setValue(value);
+}
+
+function status(app) {
+  const row = app.sheet('Settings').dump()[settingRow(app, 'Status') - 1];
+  return { value: row[1], help: row[2] };
+}
+
+const BOLT = { 'Part Name': 'Hex bolt M8', 'Part Number': 'HB-8', Location: 'Bin 3', Quantity: 10, 'Min Qty': 5,
+  'Order Link': 'https://www.mcmaster.com/91292A112' };
 
 // ---------------------------------------------------------------------------
 
-test('setup creates the tabs, default settings and triggers, and can run again', () => {
-  const app = freshApp();
-  const names = app.ss.getSheets().map((s) => s.getName());
-  assert.deepEqual(names, ['Inventory', 'Settings', 'Activity Log'], 'the blank Sheet1 is reused for Inventory');
-
-  const headers = app.sheet('Inventory').dump()[0];
-  assert.deepEqual(headers, app.value('FIELDS.map(f => f.header)'));
-  assert.equal(app.sheet('Inventory').getFrozenRows(), 1);
-  assert.equal(app.sheet('Inventory').getConditionalFormatRules().length, 2);
-
-  assert.equal(settingValue(app, 'Alert email recipients'), OWNER);
-  assert.equal(settingValue(app, 'Email as soon as a part runs low'), true);
-  assert.equal(settingValue(app, 'Reminder email'), 'Weekdays');
-  assert.equal(settingValue(app, 'Reminder hour (0-23)'), 8);
-  assert.equal(settingValue(app, 'App name'), 'Parts Inventory');
-
-  const triggers = app.env.triggers.map((t) => t.fn + ':' + t.type).sort();
-  assert.deepEqual(triggers, ['hourlyCheck:CLOCK', 'onInventoryEdit:ON_EDIT']);
-
-  app.run('setup');
-  assert.equal(app.env.triggers.length, 2, 'no duplicate triggers');
-  assert.equal(app.sheet('Inventory').getConditionalFormatRules().length, 2, 'no duplicate highlight rules');
-  assert.equal(app.sheet('Settings').dump().length, 8, 'no duplicate settings rows');
-  assert.equal(app.ss.getSheets().length, 3);
-});
-
-test('setup keeps other tabs and puts Inventory first when the spreadsheet already has data', () => {
-  const app = createApp();
-  app.ss.getSheets()[0].getRange(1, 1).setValue('something else');
-  app.run('setup');
-  assert.deepEqual(app.ss.getSheets().map((s) => s.getName()), ['Inventory', 'Sheet1', 'Settings', 'Activity Log']);
-});
-
-test('setup fills in an empty Inventory tab that was made by hand', () => {
-  const app = createApp();
-  app.ss.insertSheet('Inventory');
-  app.run('setup');
-  assert.deepEqual(app.sheet('Inventory').dump()[0], app.value('FIELDS.map(f => f.header)'));
-  assert.equal(app.sheet('Inventory').getConditionalFormatRules().length, 2);
-});
-
-test('setup does not add a second set of triggers for another person', () => {
-  const app = freshApp();
-  app.env.owner = 'coworker@example.com';
-  app.env.active = 'coworker@example.com';
+test('setup builds the three tabs on a blank spreadsheet, emails a test, and can run again', () => {
+  const app = createApp({ now: '2026-09-28T10:00:00Z' });
   const report = app.run('setup');
-  assert.equal(report.triggers.installed, false);
-  assert.equal(report.triggers.owner, OWNER);
-  assert.equal(app.env.triggers.length, 2);
+  assert.deepEqual(app.ss.getSheets().map((s) => s.getName()), ['Inventory', 'Reorder', 'Settings'],
+    'the blank Sheet1 becomes Inventory');
+
+  const sheet = inventory(app);
+  assert.deepEqual(sheet.dump()[0], LAYOUT);
+  assert.equal(sheet.getFrozenRows(), 1);
+  assert.equal(sheet.getConditionalFormatRules().length, 2);
+  assert.equal(sheet.getRange(2, 7).getDataValidation().type, 'CHECKBOX', 'Ordered is tick boxes');
+  assert.equal(sheet.getRange(500, 7).getDataValidation().type, 'CHECKBOX');
+  assert.equal(sheet.getRange(2, 4).getDataValidation().type, 'NUMBER_GTE');
+  assert.match(sheet.getRange(1, 5).getNote(), /drops to this number or below/);
+  assert.equal(sheet.getLastRow(), 1, 'no example rows');
+
+  const reorder = app.sheet('Reorder');
+  assert.deepEqual(reorder.dump()[1], ['Part Name', 'Part Number', 'Location', 'Quantity', 'Min Qty', 'Order Link']);
+  assert.match(reorder.dump()[0][0], /^Parts at or below their Min Qty/);
+  assert.equal(reorder.getRange(3, 1).getFormula(), REORDER_FORMULA);
+  assert.equal(reorder.getFrozenRows(), 2);
+
+  assert.deepEqual(status(app).value, 'On');
+  assert.match(status(app).help, /sent from owner@example\.com/);
+  assert.equal(setting(app, 'Send emails to'), OWNER);
+  assert.equal(setting(app, 'Email right away when a part runs low'), 'On');
+  assert.equal(setting(app, 'Reminder email'), 'Weekdays');
+  assert.equal(setting(app, 'Reminder hour (0-23)'), 8);
+
+  assert.deepEqual(app.env.triggers.map((t) => t.fn + ':' + t.type).sort(), ['hourlyCheck:CLOCK', 'onInventoryEdit:ON_EDIT']);
+  assert.equal(app.env.sent.length, 1);
+  assert.equal(app.env.sent[0].subject, '[Parts Inventory] Low-stock emails are on');
+  assert.match(app.env.sent[0].body, /Nothing is low right now\./);
+  assert.deepEqual(report.testEmailTo, [OWNER]);
+  assert.ok(app.env.logs.some((l) => /Done\. The low-stock emails are on/.test(l[1])), 'the editor log says it worked');
+
+  const settingsRows = app.sheet('Settings').dump().length;
+  app.run('setup');
+  assert.equal(app.ss.getSheets().length, 3);
+  assert.equal(app.env.triggers.length, 2, 'no duplicate triggers');
+  assert.equal(sheet.getConditionalFormatRules().length, 2, 'no duplicate highlight rules');
+  assert.equal(app.sheet('Settings').dump().length, settingsRows, 'no duplicate settings rows');
+  assert.equal(reorder.getRange(3, 1).getFormula(), REORDER_FORMULA);
+  assert.equal(app.env.sent.length, 2, 'every setup sends a test email');
 });
 
-test('the web app sets the spreadsheet up by itself on first use', () => {
-  const app = createApp({ serviceUrl: 'https://script.google.com/macros/s/abc123/exec' });
-  const output = app.context.doGet({ parameter: {} });
-  assert.ok(app.sheet('Inventory') && app.sheet('Settings') && app.sheet('Activity Log'));
-  assert.equal(app.env.triggers.length, 2);
-  assert.equal(output.getTitle(), 'Parts Inventory');
-  assert.deepEqual(output.meta, [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }]);
-  assert.equal(settingValue(app, 'Web app URL'), 'https://script.google.com/macros/s/abc123/exec', 'app link remembered');
-});
-
-test('adding a part keeps text as text, normalizes links and logs it', () => {
-  const app = freshApp();
-  const part = addPart(app, {
-    name: '=IMPORTXML("http://evil.example","//a")',
-    partNumber: '00123',
-    location: '3-4',
-    category: 'TRUE',
-    unit: 'ea',
-    quantity: '12',
-    minQty: '5',
-    reorderQty: 50,
-    unitCost: '0.125',
-    link: 'mcmaster.com/91292A112  https://www.grainger.com/product/1234',
-    notes: 'line one\nline two',
+test('setup finishes the ready-made sheet without losing anything typed into it', () => {
+  const app = createApp({ now: '2026-09-28T10:00:00Z' });
+  // What Google Drive makes of template/parts-inventory.xlsx.
+  sheetSpec().sheets.forEach((spec, i) => {
+    const sheet = i === 0 ? app.ss.getSheets()[0].setName(spec.name) : app.ss.insertSheet(spec.name);
+    spec.rows.forEach((row, r) => row.forEach((c, j) => {
+      const value = c && typeof c === 'object' ? (c.f !== undefined ? '=' + c.f : c.v) : c;
+      if (value === '' || value === null || value === undefined) return;
+      sheet.getRange(r + 1, j + 1).setValue(typeof value === 'string' && value[0] !== '=' ? "'" + value : value);
+    }));
   });
-  assert.equal(part.id, 'P-0001');
-  assert.equal(part.name, '=IMPORTXML("http://evil.example","//a")');
-  assert.equal(part.partNumber, '00123');
-  assert.equal(part.location, '3-4');
-  assert.equal(part.category, 'TRUE');
-  assert.equal(part.quantity, 12);
-  assert.equal(part.unitCost, 0.125);
-  assert.deepEqual(part.links, ['https://mcmaster.com/91292A112', 'https://www.grainger.com/product/1234']);
-  assert.equal(part.notes, 'line one\nline two');
-  assert.equal(part.status, 'ok');
-  assert.equal(part.updatedBy, 'owner@example.com', 'the owner is identified by Google');
-  assert.deepEqual(app.sheet('Inventory').formulas(), [], 'nothing typed into the app becomes a formula');
-
-  const log = logRows(app);
-  assert.equal(log.length, 1);
-  assert.equal(log[0][1], 'P-0001');
-  assert.equal(log[0][3], 'Added');
-  assert.equal(log[0][5], 12);
-  assert.deepEqual(app.sheet('Activity Log').formulas(), []);
-});
-
-test('part input is checked', () => {
-  const app = freshApp();
-  const save = (fields) => () => app.run('apiSavePart', ctx, fields);
-  assert.throws(save({ name: '  ', quantity: 1 }), /Give the part a name/);
-  assert.throws(save({ name: 'A', quantity: -1 }), /can't be negative/);
-  assert.throws(save({ name: 'A', quantity: 'lots' }), /must be a number/);
-  assert.throws(save({ name: 'A', quantity: 1, link: 'javascript:alert(1)' }), /doesn't look like a web link/);
-  assert.throws(save({ name: 'A', quantity: 1, link: 'not a link' }), /doesn't look like a web link/);
-  assert.throws(save({ name: 'A', quantity: 1, link: 'a.com b.com c.com d.com e.com f.com' }), /at most 5/);
-  assert.throws(save({ name: 'x'.repeat(201), quantity: 1 }), /too long/);
-  assert.equal(addPart(app, { name: 'No qty given', quantity: undefined }).quantity, 0);
-});
-
-test('editing a part only writes what changed and logs count changes separately', () => {
-  const app = freshApp();
-  const part = addPart(app, { location: 'A1' });
-  const res = app.run('apiSavePart', ctx, { id: part.id, name: 'Widget', location: 'B2', quantity: 7 });
-  assert.equal(res.part.location, 'B2');
-  assert.equal(res.part.quantity, 7);
-  const log = logRows(app);
-  assert.deepEqual(log.slice(1).map((r) => [r[3], r[4], r[5], r[7]]), [
-    ['Count set', -3, 7, ''],
-    ['Edited', '', 7, 'Changed Location'],
+  assert.equal(status(app).value, 'Off');
+  assert.match(status(app).help, /^Not turned on yet/);
+  assert.equal(setting(app, 'Send emails to'), '');
+  const sheet = inventory(app);
+  sheet.getRange(2, 1, 3, 9).setValues([
+    ['Hex bolt M8', 'HB-8', 'Bin 3', 2, 10, 'https://www.mcmaster.com/91292A112', '', 'Ask for the zinc ones', ''],
+    ['Air filter', 'AF-9', 'Shelf 1', 0, 2, 'https://www.grainger.com/product/1', 'Yes', '', ''],
+    ['Gloves', '', '', 50, 10, '', '', '', ''],
   ]);
-  const same = app.run('apiSavePart', ctx, { id: part.id, location: 'B2' });
-  assert.equal(same.unchanged, true);
-  assert.equal(logRows(app).length, 3);
-  assert.throws(() => app.run('apiSavePart', ctx, { id: 'P-9999', name: 'Ghost' }), /wasn't found/);
+
+  const report = app.run('setup');
+  assert.deepEqual(app.ss.getSheets().map((s) => s.getName()), ['Inventory', 'Reorder', 'Settings']);
+  assert.deepEqual(report.addedColumns, []);
+  assert.deepEqual(sheet.dump().slice(0, 4).map((r) => r.slice(0, 8)), [
+    LAYOUT.slice(0, 8),
+    ['Hex bolt M8', 'HB-8', 'Bin 3', 2, 10, 'https://www.mcmaster.com/91292A112', '', 'Ask for the zinc ones'],
+    ['Air filter', 'AF-9', 'Shelf 1', 0, 2, 'https://www.grainger.com/product/1', true, ''],
+    ['Gloves', '', '', 50, 10, '', '', ''],
+  ], '"Yes" becomes a ticked box and nothing else changes');
+  assert.equal(sheet.getRange(3, 7).getDataValidation().type, 'CHECKBOX');
+  assert.match(sheet.getRange(1, 5).getNote(), /drops to this number or below/, 'header tips are added');
+  assert.equal(app.sheet('Reorder').getRange(3, 1).getFormula(), REORDER_FORMULA);
+  assert.equal(setting(app, 'Send emails to'), OWNER, 'filled in with the account that ran setup');
+  assert.equal(status(app).value, 'On');
+
+  const mail = app.env.sent[0];
+  assert.equal(mail.subject, '[Parts Inventory] Low-stock emails are on');
+  assert.match(mail.body, /These parts are low right now:/);
+  assert.match(mail.body, /Air filter: OUT OF STOCK \(min 2, ticked as ordered\)[\s\S]*Hex bolt M8: 2 on hand/,
+    'out of stock first');
+  assert.doesNotMatch(mail.body, /Gloves/);
 });
 
 test('a part that runs low is emailed once, with its order link, until it is restocked', () => {
   const app = freshApp();
-  const part = addPart(app, {
-    name: 'M3 x 8 socket head screw', partNumber: '91292A112', location: 'Bin A-12', supplier: 'McMaster-Carr',
-    quantity: 10, minQty: 5, reorderQty: 100, unit: 'ea', link: 'https://www.mcmaster.com/91292A112/',
-  });
-
-  assert.equal(adjust(app, part.id, 'remove', 4).alert, null);
+  const row = addPart(app, BOLT);
   assert.equal(app.env.sent.length, 0);
 
-  let res = adjust(app, part.id, 'remove', 1, 'Line 3 repair');
-  assert.equal(res.part.quantity, 5);
-  assert.equal(res.part.status, 'low');
-  assert.equal(res.part.alerted, true);
-  assert.ok(res.part.alertSentAt);
-  assert.deepEqual(res.alert, { sent: true, count: 1, recipients: [OWNER], error: '', skipped: '' });
+  setCell(app, row, 'Quantity', 5);
   assert.equal(app.env.sent.length, 1);
   const mail = app.env.sent[0];
   assert.equal(mail.to, OWNER);
-  assert.equal(mail.name, 'Parts Inventory');
-  assert.equal(mail.subject, '[Parts Inventory] Low stock: M3 x 8 socket head screw (5 ea left)');
-  assert.match(mail.htmlBody, /href="https:\/\/www\.mcmaster\.com\/91292A112\/"/);
-  assert.match(mail.htmlBody, /Order from mcmaster\.com/);
-  assert.match(mail.htmlBody, /href="https:\/\/script\.google\.com\/macros\/s\/abc123\/exec\?part=P-0001"/);
-  assert.match(mail.body, /Order: https:\/\/www\.mcmaster\.com\/91292A112\//);
-  assert.match(mail.body, /min 5, order 100 ea/);
+  assert.equal(mail.subject, '[Parts Inventory] Low stock: Hex bolt M8 (5 left)');
+  assert.match(mail.htmlBody, /href="https:\/\/www\.mcmaster\.com\/91292A112"[^>]*>Order from mcmaster\.com/);
+  assert.match(mail.htmlBody, new RegExp('#gid=' + inventory(app).getSheetId() + '&amp;range=A2'), 'links to the row');
+  assert.match(mail.body, /Order: https:\/\/www\.mcmaster\.com\/91292A112/);
+  assert.ok(cell(app, row, 'Alert Sent') instanceof Date);
 
-  adjust(app, part.id, 'remove', 3);
-  adjust(app, part.id, 'remove', 2);
-  assert.equal(app.env.sent.length, 1, 'no repeat emails while it stays low (even at zero)');
-
-  res = adjust(app, part.id, 'add', 100);
-  assert.equal(res.part.alerted, false, 'restocking re-arms the alert');
-  assert.equal(res.part.status, 'ok');
-  res = adjust(app, part.id, 'set', 1);
-  assert.equal(res.alert.sent, true);
-  assert.equal(app.env.sent.length, 2);
-
-  const actions = logRows(app).map((r) => r[3]);
-  assert.deepEqual(actions, ['Added', 'Used', 'Used', 'Alert emailed', 'Used', 'Used', 'Restocked', 'Count set', 'Alert emailed']);
-  const used = logRows(app)[2];
-  assert.deepEqual([used[4], used[5], used[6], used[7]], [-1, 5, OWNER, 'Line 3 repair']);
-});
-
-test('out of stock gets its own subject, and several parts share one email', () => {
-  const app = freshApp();
-  const part = addPart(app, { name: 'Fuse 5A', quantity: 1, minQty: 0 });
-  adjust(app, part.id, 'remove', 1);
-  assert.equal(app.env.sent[0].subject, '[Parts Inventory] Out of stock: Fuse 5A');
-
-  // Two parts edited straight into the sheet go low at the same time.
-  const a = addPart(app, { name: 'Belt', quantity: 10, minQty: 2 });
-  const b = addPart(app, { name: 'Filter', quantity: 10, minQty: 2 });
-  const sheet = app.sheet('Inventory');
-  const rows = sheet.dump();
-  const qtyCol = rows[0].indexOf('Quantity') + 1;
-  [a, b].forEach((p) => sheet.getRange(rows.findIndex((r) => r[0] === p.id) + 1, qtyCol).setValue(1));
+  setCell(app, row, 'Quantity', 3);
   app.run('hourlyCheck');
+  assert.equal(app.env.sent.length, 1, 'not emailed again while it stays low');
+
+  setCell(app, row, 'Quantity', 20);
+  assert.equal(cell(app, row, 'Alert Sent'), '', 'restocking resets it');
+  setCell(app, row, 'Quantity', 4);
+  assert.equal(app.env.sent.length, 2, 'running low again sends a new email');
+
+  setCell(app, row, 'Min Qty', '');
+  assert.equal(cell(app, row, 'Alert Sent'), '', 'no Min Qty means no emails');
   assert.equal(app.env.sent.length, 2);
-  assert.equal(app.env.sent[1].subject, '[Parts Inventory] Low stock: 2 parts need ordering');
-  assert.match(app.env.sent[1].htmlBody, /Belt[\s\S]*Filter/);
 });
 
-test('can\'t take out more than is on hand', () => {
+test('several parts in one paste share one email, out of stock first', () => {
   const app = freshApp();
-  const part = addPart(app, { quantity: 3 });
-  assert.throws(() => adjust(app, part.id, 'remove', 5), /Only 3 on hand/);
-  assert.throws(() => adjust(app, part.id, 'remove', 0), /greater than zero/);
-  assert.throws(() => adjust(app, part.id, 'fly', 1), /Unknown stock change/);
-  assert.equal(adjust(app, part.id, 'set', 0).part.quantity, 0);
-  assert.equal(adjust(app, part.id, 'add', 0.25).part.quantity, 0.25);
+  const sheet = inventory(app);
+  const range = sheet.getRange(2, 1, 3, 5);
+  range.setValues([
+    ['Gasket', '', '', 1, 5],
+    ['V-belt', '', '', 0, 2],
+    ['Spring', '', '', 40, 5],
+  ]);
+  edit(app, range);
+  assert.equal(app.env.sent.length, 1);
+  assert.equal(app.env.sent[0].subject, '[Parts Inventory] Low stock: 2 parts need ordering');
+  assert.match(app.env.sent[0].htmlBody, /V-belt[\s\S]*Out of stock[\s\S]*Gasket/);
+  assert.match(app.env.sent[0].htmlBody, /No order link saved for this part yet/);
+  assert.doesNotMatch(app.env.sent[0].htmlBody, /Spring/);
+
+  const row = addPart(app, { 'Part Name': 'Fuse', Quantity: 3, 'Min Qty': 1 });
+  setCell(app, row, 'Quantity', 0);
+  assert.equal(app.env.sent[1].subject, '[Parts Inventory] Out of stock: Fuse');
 });
 
-test('nothing is emailed when alerts are off or no one is listed, and the app is told why', () => {
+test('edits on other tabs and in the header row are ignored, and the hourly check catches the rest', () => {
   const app = freshApp();
-  app.run('apiSaveSettings', ctx, { alertsEnabled: false });
-  const part = addPart(app, { quantity: 10, minQty: 5 });
-  let res = adjust(app, part.id, 'remove', 6);
-  assert.equal(res.alert.sent, false);
-  assert.match(res.alert.skipped, /turned off/);
-  assert.equal(res.part.alerted, false, 'not marked, so it goes out once alerts are back on');
-
-  app.run('apiSaveSettings', ctx, { alertsEnabled: true, recipients: '' });
-  res = adjust(app, part.id, 'remove', 1);
-  assert.match(res.alert.skipped, /No alert email recipients/);
+  inventory(app).getRange(2, 1, 1, 5).setValues([['Gasket', '', '', 1, 5]]);
+  edit(app, app.sheet('Settings').getRange(2, 2));
+  edit(app, app.sheet('Reorder').getRange(3, 1));
+  edit(app, inventory(app).getRange(1, 1));
   assert.equal(app.env.sent.length, 0);
-
-  app.run('apiSaveSettings', ctx, { recipients: 'buyer@example.com, lead@example.com' });
   app.run('hourlyCheck');
-  assert.equal(app.env.sent.length, 1);
-  assert.equal(app.env.sent[0].to, 'buyer@example.com,lead@example.com');
+  assert.equal(app.env.sent.length, 1, 'a change the edit check never saw (a formula, a script) still gets emailed');
 });
 
-test('a failed email is reported and retried by the hourly check', () => {
+test('ticked parts leave the reminder and untick themselves once restocked', () => {
   const app = freshApp();
-  const part = addPart(app, { quantity: 10, minQty: 5 });
-  app.env.mailFails = 'Mail service unavailable';
-  const res = adjust(app, part.id, 'remove', 8);
-  assert.equal(res.alert.sent, false);
-  assert.match(res.alert.error, /Mail service unavailable/);
-  assert.equal(res.part.alerted, false);
-  let data = app.run('apiGetData', ctx);
-  assert.match(data.info.lastAlertError.message, /Mail service unavailable/);
+  const bolt = addPart(app, Object.assign({}, BOLT, { Quantity: 2 }));
+  const filter = addPart(app, { 'Part Name': 'Air filter', Quantity: 0, 'Min Qty': 2, Ordered: 'yes' });
+  const tape = addPart(app, { 'Part Name': 'Tape', Quantity: 1, 'Min Qty': 2, Ordered: 'PO 4471' });
+  setCell(app, bolt, 'Ordered', true);
+  assert.equal(app.env.sent.length, 3, 'ordered or not, the first email still goes out');
 
-  app.env.mailFails = null;
-  app.run('hourlyCheck');
-  assert.equal(app.env.sent.length, 1);
-  data = app.run('apiGetData', ctx);
-  assert.equal(data.info.lastAlertError, null);
-  assert.ok(data.info.lastCheck);
-});
+  app.run('menuSendReorderList');
+  const reminder = app.env.sent[3];
+  assert.equal(reminder.subject, '[Parts Inventory] Reminder: 1 part needs ordering');
+  assert.match(reminder.body, /Tape: 1 on hand[\s\S]*Already ordered:[\s\S]*Air filter[\s\S]*Hex bolt M8/,
+    '"PO 4471" isn\'t a tick, so Tape still needs ordering');
 
-test('the daily email limit is respected', () => {
-  const app = freshApp({ quota: 0 });
-  const part = addPart(app, { quantity: 10, minQty: 5 });
-  const res = adjust(app, part.id, 'remove', 8);
-  assert.match(res.alert.error, /daily email limit/);
-});
-
-test('email content is escaped and unsafe links from the sheet are dropped', () => {
-  const app = freshApp();
-  const sheet = app.sheet('Inventory');
-  const headers = sheet.dump()[0];
-  const row = headers.map(() => '');
-  row[headers.indexOf('Part Name')] = '<img src=x onerror=alert(1)> "quoted" & co';
-  row[headers.indexOf('Quantity')] = 1;
-  row[headers.indexOf('Min Qty')] = 5;
-  row[headers.indexOf('Order Link')] = 'javascript:alert(1) https://ok.example.com/p?a=1&b=<2>';
-  row[headers.indexOf('Notes')] = '<script>alert(2)</script>';
-  sheet.getRange(2, 1, 1, row.length).setValues([row]);
-  app.run('hourlyCheck');
-  const html = app.env.sent[0].htmlBody;
-  assert.ok(!html.includes('<img src=x'), 'name is escaped');
-  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt; &quot;quoted&quot; &amp; co'));
-  assert.ok(!html.includes('<script>'));
-  assert.ok(!/javascript:/i.test(html), 'javascript: links never reach the email');
-  assert.ok(!html.includes('ok.example.com/p?a=1&b=<2>'), 'links with markup in them are dropped');
-});
-
-test('hand edits in the spreadsheet get an ID, a timestamp, a log entry and an alert', () => {
-  const app = freshApp();
-  const sheet = app.sheet('Inventory');
-  const headers = sheet.dump()[0];
-  const col = (h) => headers.indexOf(h) + 1;
-  sheet.getRange(2, col('Part Name')).setValue('Hand-typed part');
-  sheet.getRange(2, col('Min Qty')).setValue(3);
-  sheet.getRange(2, col('Quantity')).setValue(2);
-  const range = sheet.getRange(2, col('Quantity'));
-  app.as('');
-  app.context.onInventoryEdit({ range, oldValue: '10', value: '2', user: { getEmail: () => 'editor@example.com' } });
-
-  const row = sheet.dump()[1];
-  assert.equal(row[col('ID') - 1], 'P-0001');
-  assert.equal(row[col('Updated By') - 1], 'editor@example.com');
-  assert.ok(row[col('Last Updated') - 1] instanceof Date);
-  assert.ok(row[col('Alert Sent') - 1] instanceof Date);
-  assert.equal(app.env.sent.length, 1);
-  const log = logRows(app);
-  assert.deepEqual(log[0].slice(1, 8), ['P-0001', 'Hand-typed part', 'Count set', -8, 2, 'editor@example.com', 'Edited in the spreadsheet']);
-  assert.equal(log[1][3], 'Alert emailed');
-
-  // Editing a column the app manages doesn't touch the timestamp or send anything.
-  const before = sheet.getRange(2, col('Last Updated')).getValue().getTime();
-  app.context.onInventoryEdit({ range: sheet.getRange(2, col('Alert Sent')), user: { getEmail: () => '' } });
-  assert.equal(sheet.getRange(2, col('Last Updated')).getValue().getTime(), before);
-  // Edits on other tabs are ignored.
-  app.context.onInventoryEdit({ range: app.sheet('Settings').getRange(2, 2) });
-  assert.equal(app.env.sent.length, 1);
-});
-
-test('copied rows get new IDs, and IDs are never reused', () => {
-  const app = freshApp();
-  const a = addPart(app, { name: 'First' });
-  addPart(app, { name: 'Second' });
-  const sheet = app.sheet('Inventory');
-  const firstRow = sheet.dump()[1];
-  sheet.getRange(4, 1, 1, firstRow.length).setValues([firstRow.map((v) => (typeof v === 'string' ? "'" + v : v))]);
-  const data = app.run('apiGetData', ctx);
-  assert.deepEqual(data.parts.map((p) => p.id), ['P-0001', 'P-0002', 'P-0003']);
-  app.run('apiDeletePart', ctx, 'P-0003');
-  app.run('apiDeletePart', ctx, a.id);
-  assert.equal(addPart(app, { name: 'Third' }).id, 'P-0004');
-  assert.deepEqual(app.run('apiGetData', ctx).parts.map((p) => p.name), ['Second', 'Third']);
-  assert.equal(logRows(app).filter((r) => r[3] === 'Deleted').length, 2);
-});
-
-test('marking a part as ordered keeps it out of reminders until it is restocked', () => {
-  const app = freshApp();
-  const part = addPart(app, { quantity: 2, minQty: 5 });
-  let res = app.run('apiSetOrdered', ctx, part.id, true);
-  assert.equal(res.part.ordered, true);
-  assert.ok(res.part.orderedAt);
-  res = adjust(app, part.id, 'add', 1);
-  assert.equal(res.part.ordered, true, 'still low, still on order');
-  res = adjust(app, part.id, 'add', 10);
-  assert.equal(res.part.ordered, false, 'cleared once restocked');
-  res = app.run('apiSetOrdered', ctx, part.id, false);
-  assert.equal(res.part.ordered, false);
+  [bolt, filter, tape].forEach((row) => setCell(app, row, 'Quantity', 50));
+  assert.equal(cell(app, bolt, 'Ordered'), false, 'the box unticks itself');
+  assert.equal(cell(app, filter, 'Ordered'), '', '"yes" is cleared');
+  assert.equal(cell(app, tape, 'Ordered'), 'PO 4471', 'other notes are left alone');
+  assert.equal(cell(app, bolt, 'Alert Sent'), '');
 });
 
 test('the reminder goes out once a day at the chosen hour, weekdays only by default', () => {
   const app = freshApp();
-  app.run('apiSaveSettings', ctx, { alertsEnabled: false });
-  const low = addPart(app, { name: 'Gloves', quantity: 1, minQty: 5 });
-  const ordered = addPart(app, { name: 'Tape', quantity: 0, minQty: 2 });
-  app.run('apiSetOrdered', ctx, ordered.id, true);
+  changeSetting(app, 'Email right away when a part runs low', 'Off');
+  addPart(app, { 'Part Name': 'Gloves', Quantity: 1, 'Min Qty': 5 });
+  const tape = addPart(app, { 'Part Name': 'Tape', Quantity: 0, 'Min Qty': 2 });
+  setCell(app, tape, 'Ordered', true);
   const reminders = () => app.env.sent.filter((m) => /Reminder/.test(m.subject));
+  assert.equal(app.env.sent.length, 0, 'instant emails are off');
 
   app.setTime('2026-09-28T11:30:00Z'); // Monday 7:30 AM in New York
   app.run('hourlyCheck');
@@ -382,9 +273,8 @@ test('the reminder goes out once a day at the chosen hour, weekdays only by defa
   app.setTime('2026-09-28T12:10:00Z'); // 8:10 AM
   app.run('hourlyCheck');
   assert.equal(reminders().length, 1);
-  const mail = reminders()[0];
-  assert.equal(mail.subject, '[Parts Inventory] Reminder: 1 part needs ordering');
-  assert.match(mail.htmlBody, /Gloves[\s\S]*Already on order[\s\S]*Tape/);
+  assert.equal(reminders()[0].subject, '[Parts Inventory] Reminder: 1 part needs ordering');
+  assert.match(reminders()[0].htmlBody, /Gloves[\s\S]*Already ordered[\s\S]*Tape/);
 
   app.setTime('2026-09-28T15:10:00Z');
   app.run('hourlyCheck');
@@ -394,324 +284,247 @@ test('the reminder goes out once a day at the chosen hour, weekdays only by defa
   app.run('hourlyCheck');
   assert.equal(reminders().length, 1, 'not on weekends');
 
-  app.run('apiSaveSettings', ctx, { reminder: 'Daily', reminderHour: 6 });
+  changeSetting(app, 'Reminder email', 'Daily');
+  changeSetting(app, 'Reminder hour (0-23)', 6);
   app.run('hourlyCheck');
-  assert.equal(reminders().length, 2, 'daily includes Saturday');
+  assert.equal(reminders().length, 2, 'Daily includes Saturday');
 
-  app.run('apiSetOrdered', ctx, low.id, true);
-  app.setTime('2026-10-04T13:00:00Z');
+  changeSetting(app, 'Reminder email', 'Weekly');
+  app.setTime('2026-10-04T13:00:00Z'); // Sunday
   app.run('hourlyCheck');
-  assert.equal(reminders().length, 2, 'nothing to order, so no reminder');
-
-  app.run('apiSaveSettings', ctx, { reminder: 'Off' });
-  app.setTime('2026-10-05T13:00:00Z');
-  app.run('apiSetOrdered', ctx, low.id, false);
+  app.setTime('2026-10-05T13:00:00Z'); // Monday
   app.run('hourlyCheck');
-  assert.equal(reminders().length, 2, 'off means off');
+  assert.equal(reminders().length, 3, 'Weekly is Mondays');
 
-  const now = app.run('apiSendReminderNow', ctx);
-  assert.deepEqual(now, { sent: true, count: 1, onOrder: 1, recipients: [OWNER] });
+  changeSetting(app, 'Reminder email', 'Off');
+  app.setTime('2026-10-06T13:00:00Z');
+  app.run('hourlyCheck');
+  assert.equal(reminders().length, 3, 'Off means off');
+  assert.equal(app.env.sent.length, 3);
 });
 
-test('an access code locks the web app for everyone except the owner', () => {
+test('nothing goes out with instant emails off or no one listed, and failures show in Settings', () => {
   const app = freshApp();
-  addPart(app, { name: 'Secret sauce' });
-  app.run('apiSaveSettings', ctx, { accessCode: 'bolt-7731' });
-  assert.equal(app.run('apiGetData', ctx).settings.accessCode, 'bolt-7731', 'the owner sees it');
+  changeSetting(app, 'Email right away when a part runs low', 'Off');
+  const row = addPart(app, { 'Part Name': 'Gasket', Quantity: 1, 'Min Qty': 5 });
+  assert.equal(app.env.sent.length, 0);
+  assert.equal(cell(app, row, 'Alert Sent'), '', 'not marked, so it goes out once turned back on');
+  changeSetting(app, 'Email right away when a part runs low', 'On');
 
-  app.as(''); // someone outside the company opens the link
-  const boot = JSON.parse(/const BOOT = (.*?);<\/script>/s.exec(app.context.doGet({ parameter: {} }).getContent())[1]);
-  assert.equal(boot.locked, true);
-  assert.equal(boot.data, undefined, 'no inventory in the page before the code is entered');
-  assert.throws(() => app.run('apiGetData', { code: '' }), /ACCESS_DENIED: Enter the access code/);
-  assert.throws(() => app.run('apiGetData', { code: 'guess' }), /ACCESS_DENIED: That access code/);
-  assert.throws(() => app.run('apiAdjustStock', { code: 'guess' }, { id: 'P-0001', mode: 'remove', amount: 1 }), /ACCESS_DENIED/);
+  changeSetting(app, 'Send emails to', '');
+  app.run('hourlyCheck');
+  assert.equal(app.env.sent.length, 0);
+  changeSetting(app, 'Send emails to', 'buyer@example.com, ' + OWNER);
 
-  const data = app.run('apiGetData', { code: 'bolt-7731', actor: 'Visitor' });
-  assert.equal(data.parts[0].name, 'Secret sauce');
-  assert.equal(data.settings.accessCode, '', 'the code itself is never sent to other people');
-  assert.equal(data.settings.accessCodeSet, true);
-  assert.equal(data.user.isOwner, false);
-  const res = app.run('apiAdjustStock', { code: 'bolt-7731', actor: 'Visitor' }, { id: 'P-0001', mode: 'remove', amount: 1 });
-  assert.equal(res.part.updatedBy, 'Visitor');
-  assert.throws(() => app.run('apiSaveSettings', { code: 'bolt-7731' }, { recipients: 'me@evil.example' }), /Only owner@example.com/);
-  assert.throws(() => app.run('apiSendTestEmail', { code: 'bolt-7731' }), /Only owner@example.com/);
+  app.env.mailFails = 'Service unavailable: Gmail';
+  app.run('hourlyCheck');
+  assert.equal(app.env.sent.length, 0);
+  assert.equal(cell(app, row, 'Alert Sent'), '');
+  assert.equal(status(app).value, 'Problem');
+  assert.match(status(app).help, /couldn't be sent: Service unavailable: Gmail\. It will be tried again within the hour\./);
 
-  for (let i = 0; i < 18; i++) assert.throws(() => app.run('apiGetData', { code: 'guess' + i }), /ACCESS_DENIED/);
-  assert.throws(() => app.run('apiGetData', { code: 'bolt-7731' }), /ACCESS_LOCKED/, 'locked after 20 wrong codes');
+  app.env.mailFails = null;
+  app.run('hourlyCheck');
+  assert.equal(app.env.sent.length, 1);
+  assert.equal(app.env.sent[0].to, 'buyer@example.com,' + OWNER);
+  assert.equal(status(app).value, 'On', 'back to normal after the next email');
 });
 
-test('settings are checked before they are saved', () => {
+test('the daily email limit is respected', () => {
+  const app = freshApp({ quota: 1 });
+  app.env.quota = 0;
+  addPart(app, { 'Part Name': 'Gasket', Quantity: 1, 'Min Qty': 5 });
+  assert.equal(app.env.sent.length, 0);
+  assert.match(status(app).help, /daily email limit/);
+});
+
+test('email content is escaped and unsafe links are dropped', () => {
   const app = freshApp();
-  const save = (input) => () => app.run('apiSaveSettings', ctx, input);
-  assert.throws(save({ recipients: 'buyer@example.com, not-an-email' }), /isn't a valid email/);
-  assert.throws(save({ reminder: 'Hourly' }), /how often/);
-  assert.throws(save({ reminderHour: 24 }), /0 to 23/);
-  assert.throws(save({ accessCode: '123' }), /at least 6/);
-  assert.throws(save({ appName: ' ' }), /can't be empty/);
-  assert.throws(save({ appUrl: 'javascript:alert(1)' }), /https/);
-  const res = app.run('apiSaveSettings', ctx, {
-    recipients: 'Buyer@Example.com; lead@example.com buyer@example.com', reminder: 'Weekly', reminderHour: 14,
-    appName: 'Shop 2 Parts', accessCode: '',
+  addPart(app, {
+    'Part Name': '<img src=x onerror=alert(1)> "Seal" & Co',
+    'Part Number': '=HYPERLINK("http://evil.example","x")',
+    Quantity: 1,
+    'Min Qty': 5,
+    'Order Link': 'javascript:alert(1) grainger.com/product/AF9 http://bad"host.com',
+    Notes: '<script>alert(1)</script>',
   });
-  assert.deepEqual(res.settings.recipients, ['Buyer@Example.com', 'lead@example.com']);
-  assert.equal(settingValue(app, 'Alert email recipients'), 'Buyer@Example.com, lead@example.com');
-  assert.equal(settingValue(app, 'App name'), 'Shop 2 Parts', 'text with digits is stored as text');
-  assert.equal(settingValue(app, 'Reminder hour (0-23)'), 14);
+  const mail = app.env.sent[0];
+  assert.doesNotMatch(mail.htmlBody, /<img|<script|javascript:/);
+  assert.match(mail.htmlBody, /&lt;img src=x onerror=alert\(1\)&gt; &quot;Seal&quot; &amp; Co/);
+  assert.match(mail.htmlBody, /href="https:\/\/grainger\.com\/product\/AF9"/);
+  assert.doesNotMatch(mail.htmlBody, /bad&quot;host|bad"host/);
 });
 
-test('an existing sheet with its own headers, a title row and linked text works as is', () => {
-  const app = createApp();
+test('an existing sheet with its own headers, a title row, linked text and a Total row works as is', () => {
+  const app = createApp({ now: '2026-09-28T10:00:00Z' });
   const sheet = app.ss.insertSheet('Inventory');
   sheet.getRange(1, 1).setValue('Maintenance shop parts');
   sheet.getRange(2, 1, 1, 7).setValues([['Item', 'Part #', 'Qty', 'Reorder Point', 'Vendor', 'Link', 'Shelf Photo']]);
   sheet.getRange(3, 1, 1, 7).setValues([['V-belt A42', "'00042", 3, 2, 'Grainger', '', 'photo-1.jpg']]);
   sheet.getRange(3, 6).setLinkForTest('Buy here', 'https://www.grainger.com/product/A42');
   sheet.getRange(4, 1, 1, 7).setValues([['Air filter', 'AF-9', 8, 4, 'Uline', '=HYPERLINK("https://www.uline.com/AF9","Uline page")', 'photo-2.jpg']]);
-  sheet.getRange(5, 1, 1, 7).setValues([['Total', '', '', '', '', '', '']]);
-  app.run('setup');
+  sheet.getRange(5, 1, 1, 7).setValues([['Total', '', '=SUM(C3:C4)', '', '', '', '']]);
+  sheet.getRange(2, 3).setNote('On the shelf, not counting the truck');
+  const report = app.run('setup');
 
-  const headers = sheet.dump()[1];
-  assert.deepEqual(headers.slice(7), ['ID', 'Ordered On', 'Alert Sent', 'Last Updated', 'Updated By'], 'only core columns are added');
-  const data = app.run('apiGetData', ctx);
-  assert.equal(data.fields.partNumber, true);
-  assert.equal(data.fields.category, false, 'optional columns that are missing stay hidden');
-  const [belt, filter] = data.parts;
-  assert.deepEqual(
-    [belt.id, belt.name, belt.partNumber, belt.quantity, belt.minQty, belt.supplier, belt.links],
-    ['P-0001', 'V-belt A42', '00042', 3, 2, 'Grainger', ['https://www.grainger.com/product/A42']]);
-  assert.deepEqual(filter.links, ['https://www.uline.com/AF9']);
-  assert.equal(data.parts.length, 2, 'the Total row is not a part');
+  assert.deepEqual(report.addedColumns, ['Ordered', 'Alert Sent'], 'only what the emails need is added');
+  assert.equal(sheet.getRange(2, 3).getNote(), 'On the shelf, not counting the truck', 'your notes stay');
+  assert.match(sheet.getRange(2, 4).getNote(), /drops to this number or below/);
+  assert.deepEqual(sheet.dump()[1], ['Item', 'Part #', 'Qty', 'Reorder Point', 'Vendor', 'Link', 'Shelf Photo', 'Ordered', 'Alert Sent']);
+  assert.deepEqual(app.ss.getSheets().map((s) => s.getName()), ['Sheet1', 'Inventory', 'Reorder', 'Settings']);
+  assert.deepEqual(app.sheet('Reorder').dump()[1].slice(0, 5), ['Item', 'Part #', 'Qty', 'Reorder Point', 'Link'],
+    'the Reorder tab uses your headers');
+  assert.equal(app.sheet('Reorder').getRange(3, 1).getFormula(),
+    '=IFNA(SORT(FILTER({Inventory!A:A,Inventory!B:B,Inventory!C:C,Inventory!D:D,Inventory!F:F},' +
+    '((Inventory!A:A<>"")+(Inventory!B:B<>""))>0,ISNUMBER(Inventory!C:C),ISNUMBER(Inventory!D:D),' +
+    'Inventory!C:C<=Inventory!D:D,Inventory!H:H<>TRUE,Inventory!H:H<>"Yes"),3,TRUE),"Nothing needs reordering right now.")');
+  app.env.sent.length = 0;
 
-  const res = adjust(app, belt.id, 'remove', 1);
-  assert.equal(res.part.quantity, 2);
-  assert.equal(res.alert.sent, true);
+  const range = sheet.getRange(3, 3, 2, 1);
+  range.setValues([[2], [1]]);
+  edit(app, range);
+  const mail = app.env.sent[0];
+  assert.equal(mail.subject, '[Parts Inventory] Low stock: 2 parts need ordering');
+  assert.match(mail.htmlBody, /href="https:\/\/www\.grainger\.com\/product\/A42"/, 'link behind linked text');
+  assert.match(mail.htmlBody, /href="https:\/\/www\.uline\.com\/AF9"/, 'link inside =HYPERLINK()');
+  assert.match(mail.htmlBody, /Part # 00042/);
+  assert.match(mail.htmlBody, /Grainger/, 'the Vendor column is shown');
+  assert.doesNotMatch(mail.htmlBody, /Total/);
   assert.deepEqual(sheet.getRange(3, 1, 1, 7).getValues()[0], ['V-belt A42', '00042', 2, 2, 'Grainger', 'Buy here', 'photo-1.jpg']);
-  assert.match(app.env.sent[0].htmlBody, /href="https:\/\/www\.grainger\.com\/product\/A42"/);
-
-  addPart(app, { name: 'Fan belt B30' });
-  assert.deepEqual(sheet.dump().slice(2).map((r) => r[0]), ['V-belt A42', 'Air filter', 'Fan belt B30', 'Total'],
-    'new parts go above the Total row');
 });
 
-test('the app never takes over look-alike columns of yours, or clears them', () => {
-  const app = createApp({ now: '2026-09-28T10:00:00Z' }); // 6 AM in New York, before the reminder
+test('columns of yours that look like the script\'s are never taken over', () => {
+  const app = createApp({ now: '2026-09-28T10:00:00Z' });
   const sheet = app.ss.insertSheet('Inventory');
-  sheet.getRange(1, 1, 1, 7).setValues([['Part Name', 'Quantity', 'Min Qty', 'Ordered', 'Alerted', 'Updated', 'Part ID']]);
-  sheet.getRange(2, 1, 2, 7).setValues([
-    ['Gasket', 1, 5, false, 'no', 'yes', 'G-1'],
-    ['Spring', 40, 5, 120, 'yes', 'yes', 'G-1'],
+  sheet.getRange(1, 1, 1, 6).setValues([['Part Name', 'Quantity', 'Min Qty', 'Ordered On', 'Alerted', 'Updated']]);
+  sheet.getRange(2, 1, 2, 6).setValues([
+    ['Gasket', 1, 5, 'yes', 'no', 'yes'],
+    ['Spring', 40, 5, 120, 'yes', 'yes'],
   ]);
   app.run('setup');
-  assert.deepEqual(sheet.dump()[0].slice(7), ['ID', 'Order Link', 'Ordered On', 'Alert Sent', 'Last Updated', 'Updated By'],
-    'the app adds its own columns instead of using yours');
-  const [gasket, spring] = app.run('apiGetData', ctx).parts;
-  assert.deepEqual([gasket.ordered, gasket.alerted, spring.ordered], [false, false, false]);
+  assert.deepEqual(sheet.dump()[0].slice(6), ['Order Link', 'Ordered', 'Alert Sent']);
   app.run('hourlyCheck');
-  adjust(app, spring.id, 'add', 1);
-  app.run('apiSendReminderNow', ctx);
-  assert.deepEqual(sheet.getRange(2, 4, 2, 4).getValues(), [[false, 'no', 'yes', 'G-1'], [120, 'yes', 'yes', 'G-1']],
+  setCell(app, 2, 'Quantity', 50);
+  app.run('menuSendReorderList');
+  assert.deepEqual(sheet.getRange(2, 4, 2, 3).getValues(), [['yes', 'no', 'yes'], [120, 'yes', 'yes']],
     'your columns are untouched');
-  assert.equal(app.env.sent.length, 2, 'an alert, and a reminder that lists the gasket as still to order');
-  assert.match(app.env.sent[1].subject, /Reminder: 1 part needs ordering/);
 });
 
-test('an unticked box or "no" in Ordered On does not count as ordered', () => {
-  const app = freshApp();
-  const part = addPart(app, { quantity: 1, minQty: 5 });
-  const sheet = app.sheet('Inventory');
-  const col = sheet.dump()[0].indexOf('Ordered On') + 1;
-  [false, 'no', 0].forEach((value) => {
-    sheet.getRange(2, col).setValue(value);
-    assert.equal(app.run('apiGetData', ctx).parts[0].ordered, false, JSON.stringify(value));
-  });
-  [true, 'yes', 'Oct 2'].forEach((value) => {
-    sheet.getRange(2, col).setValue(value);
-    assert.equal(app.run('apiGetData', ctx).parts[0].ordered, true, JSON.stringify(value));
-  });
-  assert.equal(part.id, 'P-0001');
+test('a tab of yours called Reorder is left alone', () => {
+  const app = createApp();
+  app.ss.insertSheet('Reorder').getRange(1, 1, 1, 2).setValues([['Vendor', 'Phone']]);
+  const report = app.run('setup');
+  assert.equal(report.reorder, 'skipped');
+  assert.deepEqual(app.sheet('Reorder').dump(), [['Vendor', 'Phone']]);
+  assert.ok(app.env.logs.some((l) => /already have a tab named "Reorder"/.test(l[1])));
 });
 
-test('the hourly check can\'t be used to keep the inventory busy', () => {
-  const app = freshApp();
-  app.as('');
-  app.run('hourlyCheck');
-  const first = app.env.props.LAST_CHECK;
-  assert.ok(first, 'one call from the page runs');
-  app.setTime('2026-09-28T10:05:00Z');
-  app.run('hourlyCheck');
-  app.run('hourlyCheck', { triggerUid: 'made-up' });
-  assert.equal(app.env.props.LAST_CHECK, first, 'more calls within 10 minutes do nothing');
-  app.context.hourlyCheck(app.triggerEvent('hourlyCheck'));
-  assert.notEqual(app.env.props.LAST_CHECK, first, 'the real hourly trigger always runs');
+test('settings are read forgivingly', () => {
+  const app = createApp();
+  const parse = (key, raw) => app.context.parseSettingValue_(app.eval('SETTING_BY_KEY.' + key), raw);
+  [['On', true], ['off', false], [true, true], ['yes', true], ['NO', false], ['', true], ['maybe', true]]
+    .forEach(([raw, want]) => assert.equal(parse('alertsEnabled', raw), want, JSON.stringify(raw)));
+  [[8, 8], ['8', 8], ['8 AM', 8], ['2 PM', 14], ['2pm', 14], ['12 AM', 0], ['12 PM', 12], ['14:00', 14], [23, 23],
+    [24, 8], ['noon', 8], ['13 PM', 8], ['', 8]]
+    .forEach(([raw, want]) => assert.equal(parse('reminderHour', raw), want, JSON.stringify(raw)));
+  assert.equal(parse('reminder', 'weekly (mondays)'), 'Weekly');
+  assert.equal(parse('reminder', 'sometimes'), 'Weekdays');
+  assert.deepEqual(app.value('parseSettingValue_(SETTING_BY_KEY.recipients, "a@x.com; B@y.org, A@x.com, junk, <c@z.io>")'),
+    ['a@x.com', 'B@y.org', 'c@z.io']);
 });
 
-test('columns formatted as Plain text keep part numbers exactly, with no stray apostrophe', () => {
+test('the menu works from the spreadsheet', () => {
+  const app = freshApp({ ui: true });
+  app.context.onOpen();
+  const menu = app.env.menus[0];
+  assert.equal(menu.name, 'Inventory');
+  assert.deepEqual(menu.items.filter((i) => i !== '---').map((i) => i.fn), ['menuSendReorderList', 'menuSendTestEmail', 'setup']);
+  menu.items.filter((i) => i !== '---').forEach((i) => assert.equal(typeof app.context[i.fn], 'function'));
+
+  app.run('menuSendReorderList');
+  assert.match(app.env.alerts.pop().prompt, /Nothing is low right now/);
+  addPart(app, { 'Part Name': 'Gasket', Quantity: 1, 'Min Qty': 5 });
+  app.run('menuSendReorderList');
+  assert.match(app.env.alerts.pop().prompt, /Emailed the list of 1 low part to owner@example\.com/);
+  app.run('menuSendTestEmail');
+  assert.match(app.env.alerts.pop().prompt, /Sent a test email to owner@example\.com/);
+  assert.equal(app.env.sent.length, 3);
+
+  changeSetting(app, 'Send emails to', '');
+  app.run('menuSendTestEmail');
+  assert.match(app.env.alerts.pop().prompt, /No one is listed next to "Send emails to"/, 'problems are shown, not thrown');
+
+  app.env.mailFails = 'Mail is down';
+  app.run('setup');
+  assert.match(app.env.alerts.pop().prompt,
+    /The tabs are ready and the automatic checks are on, but the test email couldn't be sent: Mail is down\. Fix the/);
+  assert.equal(setting(app, 'Send emails to'), OWNER, 'setup fills in an empty address list');
+});
+
+test('setup by a second person doesn\'t add a second set of emails', () => {
   const app = freshApp();
-  const sheet = app.sheet('Inventory');
-  const headers = sheet.dump()[0];
-  ['Part Number', 'Part Name'].forEach((h) => sheet.getRange(2, headers.indexOf(h) + 1, 998, 1).setNumberFormat('@'));
-  const part = addPart(app, { name: '=cmd|calc', partNumber: '00123', location: '3-4' });
-  assert.equal(part.partNumber, '00123');
-  assert.equal(part.location, '3-4');
-  assert.deepEqual(sheet.formulas(), [], 'still no formulas');
-  const edited = app.run('apiSavePart', ctx, { id: part.id, partNumber: '0042-B' }).part;
-  assert.equal(edited.partNumber, '0042-B');
+  app.env.owner = 'coworker@example.com';
+  const report = app.run('setup');
+  assert.equal(report.triggers.installed, false);
+  assert.equal(report.triggers.owner, OWNER);
+  assert.equal(app.env.triggers.length, 2);
+  assert.match(status(app).help, /sent from owner@example\.com/);
+
+  app.env.uiAvailable = true;
+  app.env.alertAnswers.push('YES');
+  const again = app.run('setup');
+  assert.equal(again.triggers.installed, true, 'unless they say the first person has left');
+  assert.match(status(app).help, /sent from coworker@example\.com/);
 });
 
 test('a very long list of low parts still fits in one email', () => {
   const app = freshApp();
-  const sheet = app.sheet('Inventory');
-  const headers = sheet.dump()[0];
-  const rows = [];
-  for (let i = 1; i <= 200; i++) {
-    const row = headers.map(() => '');
-    row[headers.indexOf('Part Name')] = 'Bolt size ' + i;
-    row[headers.indexOf('Quantity')] = 1;
-    row[headers.indexOf('Min Qty')] = 10;
-    row[headers.indexOf('Order Link')] = 'https://www.example.com/bolt/' + i;
-    row[headers.indexOf('Notes')] = 'Some notes about this bolt that make the email a bit longer.';
-    rows.push(row.map((v) => (typeof v === 'string' && /\d/.test(v) ? "'" + v : v)));
-  }
-  sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  const rows = Array.from({ length: 400 }, (_, i) =>
+    ['Part ' + i + ' ' + 'x'.repeat(150), 'PN-' + i, 'Aisle ' + i, 1, 5, 'https://www.example.com/parts/' + i + '?ref=' + 'y'.repeat(120)]);
+  inventory(app).getRange(2, 1, rows.length, 6).setValues(rows);
   app.run('hourlyCheck');
   assert.equal(app.env.sent.length, 1);
-  const mail = app.env.sent[0];
-  assert.match(mail.subject, /200 parts need ordering/);
-  assert.match(mail.htmlBody, /And 175 more/);
-  assert.match(mail.htmlBody, /Plus 25 more\. Open the app/);
-  assert.match(mail.body, /\.\.\.plus 25 more/);
-  assert.equal(app.run('apiGetData', ctx).parts.filter((p) => p.alerted).length, 200, 'every part counts as emailed');
+  assert.match(app.env.sent[0].htmlBody, /And 375 more/);
+  assert.match(app.env.sent[0].htmlBody, /Plus 225 more/);
 });
 
-test('new parts go right under the list, never over a totals row', () => {
-  const app = freshApp();
-  addPart(app, { name: 'One' });
-  const sheet = app.sheet('Inventory');
-  const headers = sheet.dump()[0];
-  sheet.getRange(4, headers.indexOf('Quantity') + 1).setValue(999); // a stray total two rows down
-  addPart(app, { name: 'Two' });
-  addPart(app, { name: 'Three' });
-  const names = sheet.dump().slice(1).map((r) => r[1]);
-  assert.deepEqual(names, ['One', 'Two', 'Three', '']);
-  assert.equal(sheet.dump()[4][headers.indexOf('Quantity')], 999);
-});
-
-test('the page gets its data embedded safely, and ?part= is passed through', () => {
-  const app = freshApp();
-  addPart(app, { name: '</script><script>alert(1)</script>', notes: '  <!-- --> &amp;' });
-  const html = app.context.doGet({ parameter: { part: 'P-0001' } }).getContent();
-  const script = /const BOOT = (.*?);<\/script>/s.exec(html)[1];
-  assert.ok(!script.includes('</script>'), 'no way to close the script tag early');
-  const boot = JSON.parse(script);
-  assert.equal(boot.part, 'P-0001');
-  assert.equal(boot.data.parts[0].name, '</script><script>alert(1)</script>');
-  assert.equal(boot.data.user.isOwner, true);
-  assert.equal(typeof boot.data.parts[0].updatedAt, 'string');
-});
-
-test('activity can be read back, newest first, and filtered to one part', () => {
-  const app = freshApp();
-  const a = addPart(app, { name: 'A' });
-  const b = addPart(app, { name: 'B' });
-  adjust(app, a.id, 'remove', 1);
-  adjust(app, b.id, 'add', 2);
-  const all = app.run('apiGetActivity', ctx, { limit: 3 }).entries;
-  assert.deepEqual(all.map((e) => [e.partId, e.action, e.change]), [['P-0002', 'Restocked', 2], ['P-0001', 'Used', -1], ['P-0002', 'Added', 10]]);
-  assert.equal(typeof all[0].at, 'string');
-  const onlyA = app.run('apiGetActivity', ctx, { partId: 'p-0001' }).entries;
-  assert.deepEqual(onlyA.map((e) => e.action), ['Used', 'Added']);
-});
-
-test('test email works with or without parts', () => {
-  const app = freshApp();
-  assert.deepEqual(app.run('apiSendTestEmail', ctx), { recipients: [OWNER] });
-  assert.equal(app.env.sent[0].subject, '[Parts Inventory] Test: low-stock emails are working');
-  assert.match(app.env.sent[0].htmlBody, /Example part/);
-});
-
-test('menu and setup functions refuse to run through the web app', () => {
-  const app = freshApp();
-  app.as('');
-  ['setup', 'menuCheckNow', 'menuSendTestEmail', 'menuSendReminder', 'menuOpenApp', 'menuOpenSidebar', 'menuHelp']
-    .forEach((name) => assert.throws(() => app.run(name), /only be run from the spreadsheet/, name));
-  assert.equal(app.run('onInventoryEdit', { range: { getSheet: 'nope' } }), undefined, 'fake events are ignored');
-});
-
-test('spreadsheet menu items work from the spreadsheet', () => {
-  const app = freshApp({ ui: true });
-  assert.equal(app.env.dialogs[0].title, 'Parts Inventory is ready');
-  app.context.onOpen();
-  const menu = app.env.menus[0];
-  assert.equal(menu.name, 'Inventory');
-  const handlers = menu.items.filter((i) => i !== '---').map((i) => i.fn);
-  handlers.forEach((fn) => assert.equal(typeof app.context[fn], 'function', fn + ' exists'));
-
-  app.run('apiSaveSettings', ctx, { alertsEnabled: false });
-  const part = addPart(app, { quantity: 1, minQty: 5 });
-  app.run('menuCheckNow');
-  assert.match(app.env.alerts.pop().prompt, /1 part is low, but no email was sent/);
-  app.run('apiSaveSettings', ctx, { alertsEnabled: true });
-  app.run('menuCheckNow');
-  assert.match(app.env.alerts.pop().prompt, /Emailed a low-stock alert for 1 part/);
-  app.run('menuSendReminder');
-  assert.match(app.env.alerts.pop().prompt, /Sent a reminder listing 1 low part/);
-  app.run('menuSendTestEmail');
-  assert.match(app.env.alerts.pop().prompt, /Sent a test email/);
-  app.run('menuOpenApp');
-  assert.match(app.env.dialogs.pop().html, /script\.google\.com\/macros\/s\/abc123\/exec/);
-  app.run('menuOpenSidebar');
-  assert.match(app.env.sidebars[0].getContent(), new RegExp(part.id));
-  app.run('menuHelp');
-  assert.equal(app.env.dialogs.pop().title, 'Parts Inventory help');
-});
-
-test('only the intended functions can be called from the page', () => {
+test('pasting the code anywhere but the spreadsheet gives a clear message', () => {
   const app = createApp();
-  const publicFns = app.functionNames().filter((k) => !/_$/.test(k)).sort();
-  assert.deepEqual(publicFns, [
-    'apiAdjustStock', 'apiDeletePart', 'apiGetActivity', 'apiGetData', 'apiSavePart', 'apiSaveSettings',
-    'apiSendReminderNow', 'apiSendTestEmail', 'apiSetOrdered', 'doGet', 'hourlyCheck', 'menuCheckNow',
-    'menuHelp', 'menuOpenApp', 'menuOpenSidebar', 'menuSendReminder', 'menuSendTestEmail', 'onInventoryEdit',
-    'onOpen', 'setup',
-  ]);
+  app.context.SpreadsheetApp.getActiveSpreadsheet = () => null;
+  assert.throws(() => app.run('setup'), /has to be added from inside the spreadsheet/);
 });
 
-test('helpers: header matching, links and safe cells', () => {
+test('setup is the first function in the file, so the editor\'s Run button runs it', () => {
+  const source = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'Code.js'), 'utf8');
+  assert.equal(/^function (\w+)/m.exec(source)[1], 'setup');
+  assert.match(source, /\/\*\* @OnlyCurrentDoc\b/, 'Google asks for this spreadsheet only');
+  assert.doesNotMatch(source, /[^\x00-\x7f]/, 'plain ASCII, so copying it from a doc or web page can\'t mangle it');
+});
+
+test('helpers: header matching, ordered values, links and safe cells', () => {
   const app = createApp();
-  const cols = app.eval('mapColumns_')(['Part #', 'Item', 'Qty on hand', 'Par level', 'U/M', 'Product Link', 'Qty']);
-  assert.deepEqual(JSON.parse(JSON.stringify(cols)), { name: 2, partNumber: 1, quantity: 3, minQty: 4, unit: 5, link: 6 });
-
-  const url = app.eval('normalizeUrl_');
-  assert.equal(url('www.digikey.com/en/products/detail/x'), 'https://www.digikey.com/en/products/detail/x');
-  assert.equal(url('http://example.com/a,'), 'http://example.com/a');
-  assert.equal(url('ftp://example.com'), '');
-  assert.equal(url('javascript:alert(1)'), '');
-  assert.equal(url('data:text/html,hi'), '');
-  assert.equal(url('https://exa mple.com'), '');
-  assert.equal(url('https://example.com/"onmouseover='), '');
-
-  const safe = app.eval('safeCell_');
-  assert.equal(safe('Widget'), 'Widget');
-  assert.equal(safe('00123'), "'00123");
-  assert.equal(safe('=1+1'), "'=1+1");
-  assert.equal(safe("'quoted"), "''quoted");
-  assert.equal(safe(''), '');
-  assert.equal(safe(5), 5);
+  assert.deepEqual(app.value('mapColumns_(["Item", "SKU", "Qty On Hand", "Min", "URL", "On Order", "Alert sent"])'),
+    { name: 1, partNumber: 2, quantity: 3, minQty: 4, link: 5, ordered: 6, alertSentAt: 7 });
+  assert.deepEqual(app.value('mapColumns_(["Part Name", "Alerted", "Alert"])'), { name: 1 }, 'the script\'s own column matches exactly');
+  const ordered = (v) => app.context.isOrdered_(v);
+  assert.deepEqual([true, 'yes', ' X ', 'Ordered', new Date('2026-09-01')].map(ordered), [true, true, true, true, true]);
+  assert.deepEqual([false, '', 'no', 'PO 4471', 1, null].map(ordered), [false, false, false, false, false, false]);
+  assert.equal(app.context.normalizeUrl_('mcmaster.com/91292A112'), 'https://mcmaster.com/91292A112');
+  assert.equal(app.context.normalizeUrl_('javascript:alert(1)'), '');
+  assert.equal(app.context.normalizeUrl_('not a link'), '');
+  assert.equal(app.context.safeCell_('=SUM(A1)'), "'=SUM(A1)");
+  assert.equal(app.context.safeCell_('00123'), "'00123");
+  assert.equal(app.context.safeCell_('Shelf A'), 'Shelf A');
 });
 
-test('install/Code.gs is up to date and works as the only file', () => {
-  const fs = require('fs');
-  const { buildBundle, OUT } = require('../dev/build-bundle');
-  assert.equal(fs.readFileSync(OUT, 'utf8'), buildBundle(), 'install/Code.gs is out of date: run npm run build');
-
-  const app = createApp({ codeFile: OUT, serviceUrl: 'https://script.google.com/macros/s/abc123/exec', now: '2026-09-28T10:00:00Z' });
-  app.run('setup');
-  const html = app.context.doGet({ parameter: {} }).getContent();
-  assert.match(html, /<div id="app" hidden>/);
-  assert.match(html, /const BOOT = \{"mode":"webapp"/);
-  const part = addPart(app, { quantity: 5, minQty: 3 });
-  adjust(app, part.id, 'remove', 2);
-  assert.equal(app.env.sent.length, 1, 'the low-stock email goes out');
+test('the ready-made sheet file matches the script', () => {
+  assert.ok(isUpToDate(), 'template/parts-inventory.xlsx is out of date. Run: npm run build');
+  const files = unzip(require('fs').readFileSync(OUT));
+  const workbook = files['xl/workbook.xml'].toString();
+  assert.deepEqual([...workbook.matchAll(/<sheet name="([^"]+)"/g)].map((m) => m[1]), ['Inventory', 'Reorder', 'Settings']);
+  const text = (name) => files[name].toString().replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+  LAYOUT.forEach((header) => assert.ok(text('xl/worksheets/sheet1.xml').includes('>' + header + '<'), header));
+  assert.ok(text('xl/worksheets/sheet2.xml').includes('<f>' + REORDER_FORMULA.slice(1) + '</f>'));
+  createApp().value('SETTINGS').forEach((def) => assert.ok(text('xl/worksheets/sheet3.xml').includes('>' + def.label + '<'), def.label));
 });
-

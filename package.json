@@ -1,15 +1,12 @@
 {
   "name": "parts-inventory",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Parts inventory tracker that lives in a Google Sheet and emails reorder links when stock runs low (Google Apps Script).",
+  "description": "A parts inventory in a Google Sheet that emails the order links when stock runs low (Google Apps Script).",
   "license": "UNLICENSED",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "build": "node dev/build-bundle.js",
-    "preview": "node dev/preview.js",
-    "demo": "node dev/build-demo.js",
-    "screenshots": "node dev/screenshots.js",
+    "build": "node dev/build-sheet.js",
     "push": "npx @google/clasp push"
   },
   "engines": {
