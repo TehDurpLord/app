@@ -257,6 +257,56 @@ test('ticked parts leave the reminder and untick themselves once restocked', () 
   assert.equal(cell(app, bolt, 'Alert Sent'), '');
 });
 
+test('ticking Ordered before a part runs low keeps the tick until it has run low and been restocked', () => {
+  const app = freshApp();
+  const row = addPart(app, Object.assign({}, BOLT, { Quantity: 6 }));
+  setCell(app, row, 'Ordered', true);
+  app.run('hourlyCheck');
+  setCell(app, row, 'Quantity', 7);
+  assert.equal(cell(app, row, 'Ordered'), true, 'ordering ahead is kept');
+
+  setCell(app, row, 'Quantity', 5);
+  assert.equal(app.env.sent.length, 1);
+  assert.match(app.env.sent[0].htmlBody, /ticked as ordered/);
+  setCell(app, row, 'Quantity', 40);
+  assert.equal(cell(app, row, 'Ordered'), false, 'unticked once the shortage is over');
+});
+
+test('Ordered columns that hold quantities, dates or formulas are left alone', () => {
+  const app = createApp({ now: '2026-09-28T10:00:00Z' });
+  const sheet = app.ss.insertSheet('Inventory');
+  sheet.getRange(1, 1, 1, 4).setValues([['Part Name', 'Quantity', 'Min Qty', 'Ordered']]);
+  sheet.getRange(2, 1, 2, 4).setValues([['Gasket', 1, 5, 120], ['Spring', 1, 5, '=HYPERLINK("https://x.example","Yes")']]);
+  app.run('setup');
+  assert.equal(sheet.getRange(2, 4).getDataValidation(), null, 'no tick boxes over your numbers');
+  assert.equal(sheet.getRange(2, 4).getValue(), 120);
+
+  const formulaApp = freshApp();
+  const row = addPart(formulaApp, { 'Part Name': 'Spring', Quantity: 1, 'Min Qty': 5 });
+  const orderedCell = inventory(formulaApp).getRange(row, col(formulaApp, 'Ordered'));
+  orderedCell.setValue('=HYPERLINK("https://x.example","Yes")');
+  setCell(formulaApp, row, 'Quantity', 40);
+  assert.equal(orderedCell.getFormula(), '=HYPERLINK("https://x.example","Yes")', 'a formula is never overwritten');
+  assert.equal(cell(formulaApp, row, 'Alert Sent'), '');
+});
+
+test('a tab called "inventory" in lower case works the same', () => {
+  const app = freshApp();
+  const sheet = inventory(app).setName('inventory');
+  sheet.getRange(2, 1, 1, 5).setValues([['Gasket', '', '', 1, 5]]);
+  edit(app, sheet.getRange(2, 4));
+  assert.equal(app.env.sent.length, 1);
+  app.run('setup');
+  assert.deepEqual(app.ss.getSheets().map((s) => s.getName()), ['inventory', 'Reorder', 'Settings']);
+});
+
+test('a reminder time typed as "2 PM" is read as 14', () => {
+  const app = freshApp();
+  // Sheets stores a typed time as a time value, which Apps Script hands over as a Date.
+  changeSetting(app, 'Reminder hour (0-23)', new Date('2026-09-28T18:00:00Z')); // 2 PM in New York
+  assert.equal(app.context.getSettings_(app.ss).reminderHour, 14);
+});
+
 test('the reminder goes out once a day at the chosen hour, weekdays only by default', () => {
   const app = freshApp();
   changeSetting(app, 'Email right away when a part runs low', 'Off');
@@ -328,6 +378,18 @@ test('nothing goes out with instant emails off or no one listed, and failures sh
   assert.equal(app.env.sent.length, 1);
   assert.equal(app.env.sent[0].to, 'buyer@example.com,' + OWNER);
   assert.equal(status(app).value, 'On', 'back to normal after the next email');
+
+  changeSetting(app, 'Send emails to', '');
+  addPart(app, { 'Part Name': 'Fuse', Quantity: 0, 'Min Qty': 1 });
+  assert.equal(status(app).value, 'Problem');
+  assert.match(status(app).help, /no one is listed next to "Send emails to"/);
+  changeSetting(app, 'Send emails to', OWNER);
+  app.run('menuSendTestEmail');
+  assert.equal(status(app).value, 'On', 'a test email that goes through clears it');
+
+  inventory(app).getRange(1, col(app, 'Alert Sent')).setValue('');
+  addPart(app, { 'Part Name': 'Belt', Quantity: 0, 'Min Qty': 1 });
+  assert.match(status(app).help, /no "Alert Sent" column/, 'a deleted Alert Sent column is reported, not silent');
 });
 
 test('the daily email limit is respected', () => {
@@ -461,20 +523,27 @@ test('the menu works from the spreadsheet', () => {
   assert.equal(setting(app, 'Send emails to'), OWNER, 'setup fills in an empty address list');
 });
 
-test('setup by a second person doesn\'t add a second set of emails', () => {
+test('a coworker can run setup too, and two sets of checks still send each email once', () => {
   const app = freshApp();
   app.env.owner = 'coworker@example.com';
   const report = app.run('setup');
-  assert.equal(report.triggers.installed, false);
-  assert.equal(report.triggers.owner, OWNER);
-  assert.equal(app.env.triggers.length, 2);
-  assert.match(status(app).help, /sent from owner@example\.com/);
-
-  app.env.uiAvailable = true;
-  app.env.alertAnswers.push('YES');
-  const again = app.run('setup');
-  assert.equal(again.triggers.installed, true, 'unless they say the first person has left');
+  assert.equal(report.emailsFrom, 'coworker@example.com');
+  assert.equal(app.env.triggers.length, 4, 'each person has their own edit and hourly checks');
   assert.match(status(app).help, /sent from coworker@example\.com/);
+  app.env.sent.length = 0;
+
+  const row = addPart(app, { 'Part Name': 'Gasket', Quantity: 10, 'Min Qty': 5 });
+  const range = inventory(app).getRange(row, col(app, 'Quantity'));
+  range.setValue(2);
+  edit(app, range);
+  edit(app, range); // both people's edit checks run
+  app.setTime('2026-09-28T12:10:00Z'); // 8:10 AM, reminder time
+  app.run('hourlyCheck');
+  app.run('hourlyCheck');
+  assert.deepEqual(app.env.sent.map((m) => m.subject), [
+    '[Parts Inventory] Low stock: Gasket (2 left)',
+    '[Parts Inventory] Reminder: 1 part needs ordering',
+  ]);
 });
 
 test('a very long list of low parts still fits in one email', () => {
@@ -503,12 +572,14 @@ test('setup is the first function in the file, so the editor\'s Run button runs 
 
 test('helpers: header matching, ordered values, links and safe cells', () => {
   const app = createApp();
-  assert.deepEqual(app.value('mapColumns_(["Item", "SKU", "Qty On Hand", "Min", "URL", "On Order", "Alert sent"])'),
+  assert.deepEqual(app.value('mapColumns_(["Item", "SKU", "Qty On Hand", "Min", "URL", "Ordered?", "Alert sent"])'),
     { name: 1, partNumber: 2, quantity: 3, minQty: 4, link: 5, ordered: 6, alertSentAt: 7 });
+  assert.equal(app.value('mapColumns_(["Part Name", "On Order"])').ordered, undefined, '"On Order" is usually a quantity');
   assert.deepEqual(app.value('mapColumns_(["Part Name", "Alerted", "Alert"])'), { name: 1 }, 'the script\'s own column matches exactly');
   const ordered = (v) => app.context.isOrdered_(v);
-  assert.deepEqual([true, 'yes', ' X ', 'Ordered', new Date('2026-09-01')].map(ordered), [true, true, true, true, true]);
-  assert.deepEqual([false, '', 'no', 'PO 4471', 1, null].map(ordered), [false, false, false, false, false, false]);
+  assert.deepEqual([true, 'yes', ' YES '].map(ordered), [true, true, true]);
+  assert.deepEqual([false, '', 'no', 'x', 'PO 4471', 1, null, new Date('2026-09-01')].map(ordered),
+    [false, false, false, false, false, false, false, false], 'the same as the Reorder tab\'s formula');
   assert.equal(app.context.normalizeUrl_('mcmaster.com/91292A112'), 'https://mcmaster.com/91292A112');
   assert.equal(app.context.normalizeUrl_('javascript:alert(1)'), '');
   assert.equal(app.context.normalizeUrl_('not a link'), '');

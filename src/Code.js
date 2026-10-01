@@ -31,15 +31,7 @@ function setup() {
     return setupSpreadsheet_(ss);
   });
   const ui = getUi_();
-  report.triggers = installTriggers_(ss, false);
-  if (!report.triggers.installed && ui) {
-    const owner = report.triggers.owner;
-    const answer = ui.alert('Email alerts',
-      'The emails were turned on by ' + owner + ' and are sent from that account. Turn them on under your ' +
-      'account instead? Only do this if ' + owner + ' no longer has access to this spreadsheet.',
-      ui.ButtonSet.YES_NO);
-    if (answer === ui.Button.YES) report.triggers = installTriggers_(ss, true);
-  }
+  report.emailsFrom = installTriggers_(ss);
   const settings = getSettings_(ss);
   try {
     sendTestEmail_(ss, settings);
@@ -52,7 +44,7 @@ function setup() {
   updateStatus_(ss);
   const lines = setupSummary_(report);
   if (ui) {
-    ss.setActiveSheet(ss.getSheetByName(SHEET_NAMES.inventory));
+    ss.setActiveSheet(sheetNamed_(ss, SHEET_NAMES.inventory));
     ui.alert('Parts Inventory', lines.join('\n\n'), ui.ButtonSet.OK);
   } else {
     lines.forEach(function (line) { console.log(line); });
@@ -114,7 +106,7 @@ const FIELDS = [
   },
   {
     key: 'ordered', header: 'Ordered', type: 'checkbox', layout: true, core: true, width: 80,
-    aliases: ['Ordered?', 'On Order'],
+    aliases: ['Ordered?'],
     note: 'Tick it once more is on the way. Ticked parts are left out of the reminder emails, and the box unticks itself when the part is restocked.',
   },
   {
@@ -201,7 +193,7 @@ const MAX_LINKS = 5;
 const EMAIL_CARDS = 25; // parts shown in full in one email
 const EMAIL_LIST = 150; // parts listed by name after those (Gmail caps an email at about 200 KB)
 const DATE_TIME_FORMAT = 'mmm d, yyyy h:mm am/pm';
-const YES_TEXT = /^(yes|y|x|ordered|true|on order)$/i;
+const YES_TEXT = /^(yes|y|x|ordered|true)$/i;
 const NO_TEXT = /^(no|n|false|not ordered|-)$/i;
 
 const COLORS = {
@@ -235,6 +227,7 @@ function menuSendReorderList() {
     const result = withLock_(function () {
       return sendReminder_(ss, readInventory_(ss), settings, true);
     });
+    if (result.sent) clearError_(ss);
     alert_('Reorder list', result.sent
       ? 'Emailed the list of ' + countLabel_(result.count + result.onOrder, 'low part', 'low parts') +
         ' to ' + settings.recipients.join(', ') + '.'
@@ -246,6 +239,7 @@ function menuSendTestEmail() {
   runMenu_(function (ss) {
     const settings = getSettings_(ss);
     sendTestEmail_(ss, settings);
+    clearError_(ss);
     alert_('Test email', 'Sent a test email to ' + settings.recipients.join(', ') +
       '. If it doesn\'t arrive in a minute or two, check the spam folder.');
   });
@@ -269,7 +263,7 @@ function onInventoryEdit(e) {
   try {
     if (!e || !e.range || typeof e.range.getSheet !== 'function') return;
     const sheet = e.range.getSheet();
-    if (sheet.getName() !== SHEET_NAMES.inventory) return;
+    if (sheet.getName().toLowerCase() !== SHEET_NAMES.inventory.toLowerCase()) return;
     const ss = sheet.getParent();
     withLock_(function () {
       const inv = readInventory_(ss);
@@ -286,7 +280,7 @@ function onInventoryEdit(e) {
 /** Runs every hour: catches anything the edit check missed and sends the reminder. */
 function hourlyCheck() {
   const ss = getSpreadsheet_();
-  if (!ss.getSheetByName(SHEET_NAMES.inventory)) return;
+  if (!sheetNamed_(ss, SHEET_NAMES.inventory)) return;
   withLock_(function () {
     const inv = readInventory_(ss);
     const settings = getSettings_(ss);
@@ -295,21 +289,21 @@ function hourlyCheck() {
   });
 }
 
-function installTriggers_(ss, force) {
-  const props = PropertiesService.getScriptProperties();
+/**
+ * Turns on the edit and hourly checks under the account running setup, and
+ * returns that account. Triggers belong to the person who made them, so a
+ * coworker's setup adds a second set. That doesn't double the emails: both
+ * sets share Alert Sent and the reminder date, under the same script lock.
+ */
+function installTriggers_(ss) {
   const me = effectiveEmail_() || 'the account that ran setup';
-  const owner = props.getProperty(PROP.triggersOwner);
-  const existing = ScriptApp.getProjectTriggers().filter(function (t) {
-    return TRIGGER_HANDLERS.indexOf(t.getHandlerFunction()) !== -1;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (TRIGGER_HANDLERS.indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t);
   });
-  // Triggers belong to the person who made them and nobody else can see them,
-  // so don't quietly add a second set (and send every email twice).
-  if (owner && owner !== me && !existing.length && !force) return { installed: false, owner: owner };
-  existing.forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('onInventoryEdit').forSpreadsheet(ss).onEdit().create();
   ScriptApp.newTrigger('hourlyCheck').timeBased().everyHours(1).create();
-  props.setProperty(PROP.triggersOwner, me);
-  return { installed: true, owner: me };
+  PropertiesService.getScriptProperties().setProperty(PROP.triggersOwner, me);
+  return me;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,9 +332,10 @@ function processAlerts_(inv, settings, parts) {
   (parts || inv.parts).forEach(function (p) {
     if (needsReorder_(p)) {
       if (!p.alerted) newlyLow.push(p);
-    } else if (p.quantity !== null) {
-      if (p.alerted) clearAlert.push(p);
-      if (p.ordered && p.minQty !== null) clearOrdered.push(p);
+    } else if (p.quantity !== null && p.alerted) {
+      // Restocked after running low: start over, ready for the next shortage.
+      clearAlert.push(p);
+      if (p.ordered && !p.orderedFormula) clearOrdered.push(p);
     }
   });
   if (clearAlert.length && inv.cols.alertSentAt) {
@@ -348,7 +343,7 @@ function processAlerts_(inv, settings, parts) {
     clearAlert.forEach(function (p) { p.alerted = false; });
   }
   if (clearOrdered.length) {
-    // A ticked box goes back to unticked; "yes" or a date is cleared.
+    // A ticked box goes back to unticked; "yes" is cleared.
     writeCells_(inv.sheet, inv.cols.ordered, clearOrdered.map(function (p) {
       return { row: p.row, value: p.orderedRaw === true ? false : '' };
     }));
@@ -358,16 +353,17 @@ function processAlerts_(inv, settings, parts) {
 
   newlyLow.sort(byUrgency_);
   result.parts = newlyLow.map(displayName_);
-  if (!inv.cols.alertSentAt) {
-    result.skipped = 'The Inventory tab has no "Alert Sent" column. Choose Inventory > Set up / repair.';
-    return result;
-  }
   if (!settings.alertsEnabled) {
     result.skipped = 'Emailing right away is turned off in the Settings tab.';
     return result;
   }
-  if (!settings.recipients.length) {
-    result.skipped = 'No one is listed next to "Send emails to" in the Settings tab.';
+  if (!inv.cols.alertSentAt) {
+    result.skipped = 'the Inventory tab has no "Alert Sent" column. Choose Inventory > Set up / repair';
+  } else if (!settings.recipients.length) {
+    result.skipped = 'no one is listed next to "Send emails to" in the Settings tab';
+  }
+  if (result.skipped) {
+    recordError_(inv.ss, result.skipped);
     return result;
   }
   try {
@@ -480,7 +476,7 @@ function buildEmail_(inv, settings, parts, kind, onOrder) {
 
   const sheetUrl = ss.getUrl();
   const rowUrl = function (p) { return sheetUrl + '#gid=' + inv.sheet.getSheetId() + '&range=A' + p.row; };
-  const reorderSheet = ss.getSheetByName(SHEET_NAMES.reorder);
+  const reorderSheet = sheetNamed_(ss, SHEET_NAMES.reorder);
   const font = '-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif';
   const orderedCards = onOrder.length
     ? '<h2 style="font-size:16px;margin:24px 0 10px;color:#1f2937;">Already ordered</h2>' + partsHtml_(onOrder, rowUrl)
@@ -620,7 +616,7 @@ function clearError_(ss) {
 // ---------------------------------------------------------------------------
 
 function readInventory_(ss) {
-  const sheet = ss.getSheetByName(SHEET_NAMES.inventory);
+  const sheet = sheetNamed_(ss, SHEET_NAMES.inventory);
   if (!sheet) throw new Error('The Inventory tab is missing. Choose Inventory > Set up / repair.');
   const lastRow = sheet.getLastRow();
   const lastCol = Math.max(sheet.getLastColumn(), 1);
@@ -629,13 +625,17 @@ function readInventory_(ss) {
   const cols = mapColumns_(values[headerIndex] || []);
   const headerRow = headerIndex + 1;
   const firstDataRow = headerRow + 1;
-  const links = cols.link && lastRow >= firstDataRow
-    ? readLinkUrls_(sheet, firstDataRow, cols.link, lastRow - firstDataRow + 1)
+  const dataRows = lastRow - firstDataRow + 1;
+  const links = cols.link && dataRows > 0 ? readLinkUrls_(sheet, firstDataRow, cols.link, dataRows) : [];
+  const orderedFormulas = cols.ordered && dataRows > 0
+    ? sheet.getRange(firstDataRow, cols.ordered, dataRows, 1).getFormulas()
     : [];
   const parts = [];
   for (let i = headerIndex + 1; i < values.length; i++) {
     const part = rowToPart_(values[i], cols, i + 1, links[i - headerIndex - 1]);
-    if (part) parts.push(part);
+    if (!part) continue;
+    part.orderedFormula = !!(orderedFormulas[i - headerIndex - 1] && orderedFormulas[i - headerIndex - 1][0]);
+    parts.push(part);
   }
   return { ss: ss, sheet: sheet, values: values, headerRow: headerRow, cols: cols, parts: parts };
 }
@@ -678,11 +678,12 @@ function rowToPart_(row, cols, rowNumber, extraLinks) {
   };
 }
 
-/** A ticked box, "yes" or a date counts as ordered. Anything else doesn't, and is never cleared. */
+/**
+ * A ticked box (or "yes") counts as ordered, the same as in the Reorder tab's
+ * formula. Anything else doesn't, and is never cleared.
+ */
 function isOrdered_(value) {
-  if (value === true) return true;
-  if (isDate_(value)) return !isNaN(value.getTime());
-  return typeof value === 'string' && YES_TEXT.test(value.trim());
+  return value === true || (typeof value === 'string' && /^yes$/i.test(value.trim()));
 }
 
 /** Link URLs hidden behind rich text links or =HYPERLINK() formulas in the link column. */
@@ -784,10 +785,11 @@ function isEmptySheet_(sheet) {
 // ---------------------------------------------------------------------------
 
 function getSettings_(ss) {
-  const found = readSettingsRows_(ss.getSheetByName(SHEET_NAMES.settings));
+  const found = readSettingsRows_(sheetNamed_(ss, SHEET_NAMES.settings));
+  const tz = ss.getSpreadsheetTimeZone();
   const settings = {};
   SETTINGS.forEach(function (def) {
-    settings[def.key] = parseSettingValue_(def, found[def.key] ? found[def.key].value : undefined);
+    settings[def.key] = parseSettingValue_(def, found[def.key] ? found[def.key].value : undefined, tz);
   });
   return settings;
 }
@@ -810,7 +812,7 @@ function findSettingDef_(label) {
   }) || null;
 }
 
-function parseSettingValue_(def, raw) {
+function parseSettingValue_(def, raw, tz) {
   if (def.type === 'emails') return uniqueEmails_(parseEmails_(raw).filter(isEmail_));
   if (def.type === 'onoff') {
     if (typeof raw === 'boolean') return raw;
@@ -823,12 +825,16 @@ function parseSettingValue_(def, raw) {
     const text = String(raw == null ? '' : raw).trim().toLowerCase();
     return def.choices.find(function (c) { return text && text.indexOf(c.toLowerCase()) === 0; }) || def.default;
   }
-  if (def.type === 'hour') return parseHour_(raw, def.default);
+  if (def.type === 'hour') return parseHour_(raw, def.default, tz);
   return cellText_(raw) || def.default;
 }
 
-/** 8, "8", "8 AM", "2 PM" or "14:00" as an hour from 0 to 23. */
-function parseHour_(raw, fallback) {
+/**
+ * 8, "8", "8 AM", "2 PM" or "14:00" as an hour from 0 to 23. Sheets turns a
+ * typed time like 2 PM into a time value, which arrives here as a Date.
+ */
+function parseHour_(raw, fallback, tz) {
+  if (isDate_(raw)) return isNaN(raw.getTime()) ? fallback : Number(Utilities.formatDate(raw, tz || 'UTC', 'H'));
   if (typeof raw === 'number') return raw >= 0 && raw < 24 ? Math.floor(raw) : fallback;
   const m = /^(\d{1,2})(?::00)?\s*([ap])?\.?\s*m?\.?$/i.exec(String(raw == null ? '' : raw).trim());
   if (!m) return fallback;
@@ -841,7 +847,7 @@ function parseHour_(raw, fallback) {
 }
 
 function writeSettings_(ss, values) {
-  const sheet = ss.getSheetByName(SHEET_NAMES.settings);
+  const sheet = sheetNamed_(ss, SHEET_NAMES.settings);
   const found = readSettingsRows_(sheet);
   Object.keys(values).forEach(function (key) {
     const def = SETTING_BY_KEY[key];
@@ -880,7 +886,7 @@ function listRule_(choices) {
 
 /** Shows in the Settings tab whether the emails are on, and the last problem if there is one. */
 function updateStatus_(ss) {
-  const sheet = ss.getSheetByName(SHEET_NAMES.settings);
+  const sheet = sheetNamed_(ss, SHEET_NAMES.settings);
   if (!sheet) return;
   const props = PropertiesService.getScriptProperties();
   const owner = props.getProperty(PROP.triggersOwner);
@@ -908,7 +914,7 @@ function updateStatus_(ss) {
 /** Creates the tabs, or adds what's missing. Call while holding the lock. */
 function setupSpreadsheet_(ss) {
   const report = { created: [], addedColumns: [], reorder: '' };
-  let sheet = ss.getSheetByName(SHEET_NAMES.inventory);
+  let sheet = sheetNamed_(ss, SHEET_NAMES.inventory);
   if (!sheet) {
     const sheets = ss.getSheets();
     sheet = sheets.length === 1 && isEmptySheet_(sheets[0])
@@ -988,18 +994,29 @@ function addHeaderNotes_(inv) {
   });
 }
 
-/** Turns the Ordered column into tick boxes, keeping what's already marked. */
+/**
+ * Turns the Ordered column into tick boxes, keeping what's already marked.
+ * Only when it holds nothing but yes/no answers: a column of quantities,
+ * dates, notes or formulas is left as it is.
+ */
 function makeCheckboxes_(sheet, firstRow, col, numRows) {
   const range = sheet.getRange(firstRow, col, numRows, 1);
+  const formulas = range.getFormulas();
   const updates = [];
-  range.getValues().forEach(function (r, i) {
-    const text = typeof r[0] === 'string' ? r[0].trim() : '';
-    if (!text) return;
+  const yesNoOnly = range.getValues().every(function (r, i) {
+    const value = r[0];
+    if (formulas[i][0]) return false;
+    if (value === '' || value === null || typeof value === 'boolean') return true;
+    const text = typeof value === 'string' ? value.trim() : '';
     if (YES_TEXT.test(text)) updates.push({ row: firstRow + i, value: true });
     else if (NO_TEXT.test(text)) updates.push({ row: firstRow + i, value: false });
+    else return false;
+    return true;
   });
+  if (!yesNoOnly) return false;
   writeCells_(sheet, col, updates);
   range.setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+  return true;
 }
 
 /** Colours low rows yellow and out-of-stock rows red, right in the spreadsheet. */
@@ -1046,7 +1063,7 @@ function isStockRule_(rule) {
  */
 function setupReorderSheet_(ss, inv) {
   const keys = REORDER_KEYS.filter(function (key) { return inv.cols[key]; });
-  let sheet = ss.getSheetByName(SHEET_NAMES.reorder);
+  let sheet = sheetNamed_(ss, SHEET_NAMES.reorder);
   if (sheet && !isReorderSheet_(sheet)) return 'skipped';
   const created = !sheet;
   if (!sheet) sheet = ss.insertSheet(SHEET_NAMES.reorder, inv.sheet.getIndex());
@@ -1102,7 +1119,7 @@ function reorderFormula_(cols, keys) {
 }
 
 function setupSettingsSheet_(ss, report) {
-  let sheet = ss.getSheetByName(SHEET_NAMES.settings);
+  let sheet = sheetNamed_(ss, SHEET_NAMES.settings);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAMES.settings);
     sheet.getRange(1, 1, 1, 3).setValues([['Setting', 'Value', 'What it does']])
@@ -1131,11 +1148,8 @@ function setupSummary_(report) {
     lines.push('The tabs are ready and the automatic checks are on, but the test email couldn\'t be sent: ' +
       report.emailError.replace(/\.$/, '') + '. Fix the "Send emails to" row in the Settings tab, then choose ' +
       'Inventory > Send a test email.');
-  } else if (report.triggers.installed) {
-    lines.push('Done. The low-stock emails are on, and a test email went to ' + report.testEmailTo.join(', ') + '.');
   } else {
-    lines.push('Done. A test email went to ' + report.testEmailTo.join(', ') + '. The automatic emails are still sent from ' +
-      report.triggers.owner + '\'s account.');
+    lines.push('Done. The low-stock emails are on, and a test email went to ' + report.testEmailTo.join(', ') + '.');
   }
   if (report.addedColumns.length) {
     lines.push('Added these columns to the Inventory tab: ' + report.addedColumns.join(', ') + '.');
@@ -1151,6 +1165,12 @@ function setupSummary_(report) {
 // ---------------------------------------------------------------------------
 // Spreadsheet, people and locking
 // ---------------------------------------------------------------------------
+
+/** The tab with this name. Sheets treats "inventory" and "Inventory" as the same name. */
+function sheetNamed_(ss, name) {
+  const want = name.toLowerCase();
+  return ss.getSheets().find(function (sheet) { return sheet.getName().toLowerCase() === want; }) || null;
+}
 
 function getSpreadsheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();

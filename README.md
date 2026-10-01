@@ -11,7 +11,7 @@ No app and no website: everything is one spreadsheet, plus a little code inside 
   email goes out with the part's order link. You get one email per shortage. You only get another one
   after the part has been restocked and runs low again.
 - **Ordered**: tick it once you've ordered more. Ticked parts drop off the Reorder tab and the reminder
-  email, and the box unticks itself when the part is restocked.
+  email, and the box unticks itself once the part has run low and been restocked.
 - **Reorder**: the list of parts that need ordering, with their links. It updates by itself; don't type in it.
 - **Settings**: who gets the emails, the reminder schedule, and a **Status** line that says whether the
   emails are on.
@@ -82,7 +82,7 @@ common forms:
 | Min Qty | Min, Minimum, Reorder Point, Reorder Level, Par, Threshold, Safety Stock |
 | Order Link | Link, URL, Product Link, Reorder Link, Purchase Link, Website |
 | Location | Bin, Shelf, Storage, Area |
-| Ordered | Ordered?, On Order |
+| Ordered | Ordered? (tick boxes, or *Yes*) |
 | Supplier, Reorder Qty, Unit | Vendor · Order Qty · UOM (shown in the emails when you have them) |
 
 Setup adds the columns it needs at the end (for example *Ordered* and *Alert Sent*) and never deletes
@@ -99,9 +99,8 @@ only recognized by that exact name, so a column of yours like *Alerted* is never
   Sent* is filled in). Clear *Alert Sent* to send it again. A part with no *Min Qty* never sends emails.
 - **No Inventory menu:** reload the spreadsheet. The emails work without the menu.
 - **Don't rename** the *Inventory* or *Settings* tabs; the script finds them by name.
-- **Setup asks whether to turn the emails on under your account:** the emails run under the account that
-  first ran setup. Only say yes if that person no longer has access to the spreadsheet; otherwise every
-  email would be sent twice.
+- **Someone else set it up and has left:** run **Inventory → Set up / repair** (or step 2) yourself. If
+  two people have run setup, each email still goes out once.
 
 ---
 
